@@ -1551,8 +1551,16 @@ function completeSale(payMethod) {
     document.getElementById('taekbaeNameInput').value = '';
     document.getElementById('taekbaePhoneInput').value = '';
     go(19);
+  } else if (pickupMethod === 'partial') {
+    // 부분수령: partialCart 항목을 deliveryCart에 복사 후 수취인 입력 (page14)
+    Object.keys(deliveryCart).forEach(k => delete deliveryCart[k]);
+    Object.entries(partialCart).forEach(([k, v]) => { deliveryCart[k] = { ...v }; });
+    partialDeliveryMode = true;
+    document.getElementById('deliveryRecipientInput').value = '';
+    document.getElementById('deliveryPhoneInput').value = '';
+    go(14);
   } else {
-    // 현장수령 / 부분수령: 개별발송 여부 확인 후 종료
+    // 현장수령: 개별발송 여부 확인 후 종료
     if (Object.keys(basicCart).length && confirm('개별발송이 필요한가요?')) {
       startDeliveryAfterPay();
     } else {
@@ -1585,6 +1593,7 @@ function saveTaekbaeRecipient() {
 
 /* ══ 부분수령 로직 ════════════════════════════════════════════ */
 const partialCart    = {};
+let   partialDeliveryMode = false;
 const partialOptQty  = {};
 let   currentPartialGroup = null;
 
@@ -2027,12 +2036,23 @@ function saveDeliveryOrder() {
   deliveryOrders.push({ recipient, phone, items: Object.values(deliveryCart) });
   localStorage.setItem('ohne_delivery', JSON.stringify(deliveryOrders));
   Object.keys(deliveryCart).forEach(k => delete deliveryCart[k]);
-  Object.keys(basicCart).forEach(k => delete basicCart[k]);
-  refreshBasicCart();
   document.getElementById('deliveryCartSummary').classList.remove('show');
-  deliveryMode = false;
-  alert(`✅ 개별발송 저장!\n받는 분: ${recipient} (${phone})`);
-  go(1);
+
+  if (partialDeliveryMode) {
+    // 부분수령 흐름: basicCart·partialCart 정리 후 page1
+    partialDeliveryMode = false;
+    Object.keys(partialCart).forEach(k => delete partialCart[k]);
+    Object.keys(basicCart).forEach(k => delete basicCart[k]);
+    refreshBasicCart();
+    alert(`개별발송 등록 완료!\n받는 분: ${recipient} (${phone})`);
+    go(1);
+  } else {
+    Object.keys(basicCart).forEach(k => delete basicCart[k]);
+    refreshBasicCart();
+    deliveryMode = false;
+    alert(`개별발송 저장!\n받는 분: ${recipient} (${phone})`);
+    go(1);
+  }
 }
 
 function viewDeliveryOrders() {
