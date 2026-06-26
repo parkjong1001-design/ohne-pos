@@ -896,6 +896,48 @@
   </div>
 </div>
 
+<!-- ══ 19페이지: 택배 수취인 입력 ══════════════════════════════════ -->
+<div class="page" id="page19">
+  <button class="back" onclick="go(8)">← 뒤로</button>
+  <h1>수취인 정보 입력</h1>
+  <div class="qty-box" style="max-width:500px;width:100%;gap:20px;">
+    <div style="width:100%;display:flex;flex-direction:column;gap:8px;">
+      <span style="font-size:14px;font-weight:700;color:#5A3520;">받는 분 성함</span>
+      <input id="taekbaeNameInput" type="text" placeholder="이름을 입력하세요"
+        style="width:100%;height:58px;border:2px solid #D5BFA5;border-radius:12px;
+               padding:0 18px;font-size:17px;font-weight:600;outline:none;background:#FAF5EE;color:#2A180B;"
+        onfocus="this.style.borderColor='#8C5E3E'" onblur="this.style.borderColor='#D5BFA5'"/>
+    </div>
+    <div style="width:100%;display:flex;flex-direction:column;gap:8px;">
+      <span style="font-size:14px;font-weight:700;color:#5A3520;">전화번호 뒷 4자리</span>
+      <input id="taekbaePhoneInput" type="tel" inputmode="numeric" maxlength="4" placeholder="0000"
+        style="width:100%;height:58px;border:2px solid #D5BFA5;border-radius:12px;
+               padding:0 18px;font-size:22px;font-weight:800;outline:none;background:#FAF5EE;color:#2A180B;letter-spacing:6px;"
+        onfocus="this.style.borderColor='#8C5E3E'" onblur="this.style.borderColor='#D5BFA5'"
+        oninput="this.value=this.value.replace(/[^0-9]/g,'').slice(0,4)"/>
+    </div>
+    <button class="btn-confirm" style="width:100%;background:linear-gradient(145deg,#4A6890,#2E4F70);
+      box-shadow:0 8px 24px rgba(46,79,112,.3);" onclick="saveTaekbaeRecipient()">
+      저장 완료
+    </button>
+  </div>
+</div>
+
+<!-- ══ 20페이지: 부분수령 상품 선택 ════════════════════════════════ -->
+<div class="page" id="page20">
+  <button class="back" onclick="go(18)">← 뒤로</button>
+  <h1>부분수령 상품 선택</h1>
+  <p class="opt-subtitle">현장에서 수령할 상품을 선택하세요</p>
+  <div class="opt-list" id="partialSelectList"></div>
+  <button class="btn-confirm" id="partialConfirmBtn"
+    style="width:100%;max-width:700px;background:linear-gradient(145deg,#2A180B,#5A3520);
+           box-shadow:0 8px 24px rgba(42,24,11,.3);display:none;"
+    onclick="goPartialPayment()">
+    선택 완료 → 결제하기
+  </button>
+</div>
+
+
 <!-- ══ 13페이지: 개별발송 상품 선택 (상품별 그룹) ══════════════════ -->
 <div class="page" id="page13">
   <button class="back" onclick="exitDelivery()">← 뒤로</button>
@@ -1406,11 +1448,13 @@ function selectPickup(method) {
   if (!pendingOrder) return;
 
   if (method === 'partial') {
-    alert('부분수령 기능은 준비 중입니다.');
+    renderPartialSelect();
+    go(20);
     return;
   }
 
   const shippingFee = (method === 'delivery' && pendingOrder.origTotal < 100000) ? 3000 : 0;
+  if (method === 'partial_confirmed') method = 'partial';
   const payTotal    = pendingOrder.finalTotal + shippingFee;
   pendingOrder.shippingFee = shippingFee;
   pendingOrder.payTotal    = payTotal;
@@ -1471,22 +1515,102 @@ function completeSale(payMethod) {
   paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품' });
   localStorage.setItem('ohne_payment', JSON.stringify(paymentLog));
 
-  const methodLabel = payMethod === 'card' ? '💳 카드' : '🏦 계좌이체';
+  const methodLabel = payMethod === 'card' ? '카드' : '계좌이체';
+  const pickupMethod = pendingOrder.pickupMethod;
   afterPayPage = 1;
   pendingOrder = null;
 
-  alert(`✅ 정산 완료! (${methodLabel})`);
+  alert(`정산 완료! (${methodLabel})`);
 
-  if (Object.keys(basicCart).length) {
-    go(18);
+  if (pickupMethod === 'delivery') {
+    // 택배수령: 수취인 정보 입력 페이지로
+    document.getElementById('taekbaeNameInput').value = '';
+    document.getElementById('taekbaePhoneInput').value = '';
+    go(19);
   } else {
-    go(1);
+    // 현장수령 / 부분수령: 개별발송 여부 확인 후 종료
+    if (Object.keys(basicCart).length && confirm('개별발송이 필요한가요?')) {
+      startDeliveryAfterPay();
+    } else {
+      Object.keys(basicCart).forEach(k => delete basicCart[k]);
+      refreshBasicCart();
+      go(1);
+    }
   }
 }
 
 function goBackFromPage8() {
   go(18);
 }
+
+/* ── 택배수령 수취인 저장 ── */
+const taekbaeOrders = JSON.parse(localStorage.getItem('ohne_taekbae') || '[]');
+
+function saveTaekbaeRecipient() {
+  const name  = document.getElementById('taekbaeNameInput').value.trim();
+  const phone = document.getElementById('taekbaePhoneInput').value.trim();
+  if (!name)  { alert('받는 분 성함을 입력하세요.'); return; }
+  if (phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
+  taekbaeOrders.push({ name, phone, date: new Date().toLocaleDateString('ko-KR') });
+  localStorage.setItem('ohne_taekbae', JSON.stringify(taekbaeOrders));
+  Object.keys(basicCart).forEach(k => delete basicCart[k]);
+  refreshBasicCart();
+  alert(`저장 완료!\n${name} (${phone})`);
+  go(1);
+}
+
+/* ── 부분수령 상품 선택 ── */
+const partialSelected = new Set();
+
+function renderPartialSelect() {
+  partialSelected.clear();
+  const list = document.getElementById('partialSelectList');
+  list.innerHTML = '';
+  document.getElementById('partialConfirmBtn').style.display = 'none';
+
+  Object.entries(basicCart).forEach(([key, item]) => {
+    const sizeStr = item.size ? ' · ' + item.size : '';
+    const card = document.createElement('button');
+    card.className = 'opt-btn';
+    card.dataset.key = key;
+    card.innerHTML = `
+      <div class="pnum pnum-${item.no[0]}" style="min-width:52px;height:52px;font-size:12px;flex-shrink:0;">${item.no}</div>
+      <div class="opt-name" style="font-size:15px;">
+        <div style="font-weight:700;color:#2A180B;">${item.name}</div>
+        <div style="font-size:12px;color:#B08B6A;margin-top:3px;">${item.color}${sizeStr} · ${item.qty}개</div>
+      </div>
+      <div style="flex-shrink:0;font-size:22px;color:#C4A882;" id="pcheck_${key.replace(/\|/g,'_')}">○</div>`;
+    card.addEventListener('click', () => togglePartial(key, card));
+    list.appendChild(card);
+  });
+}
+
+function togglePartial(key, card) {
+  const icon = document.getElementById('pcheck_' + key.replace(/\|/g, '_'));
+  if (partialSelected.has(key)) {
+    partialSelected.delete(key);
+    card.style.borderColor = '';
+    card.style.background  = '';
+    icon.textContent = '○';
+    icon.style.color = '#C4A882';
+  } else {
+    partialSelected.add(key);
+    card.style.borderColor = '#8C5E3E';
+    card.style.background  = '#F5EAD8';
+    icon.textContent = '●';
+    icon.style.color = '#7C4F30';
+  }
+  document.getElementById('partialConfirmBtn').style.display =
+    partialSelected.size > 0 ? 'block' : 'none';
+}
+
+function goPartialPayment() {
+  if (!partialSelected.size) return;
+  // 선택된 항목만 pendingOrder에 반영하지 않고, 전체 주문 그대로 결제 진행
+  // (부분수령 세부 로직은 추후 확장)
+  selectPickup('partial_confirmed');
+}
+
 
 
 
