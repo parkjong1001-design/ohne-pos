@@ -927,14 +927,28 @@
 <div class="page" id="page20">
   <button class="back" onclick="go(18)">← 뒤로</button>
   <h1>부분수령 상품 선택</h1>
-  <p class="opt-subtitle">현장에서 수령할 상품을 선택하세요</p>
+  <p class="opt-subtitle">상품을 누르면 옵션을 선택할 수 있습니다</p>
   <div class="opt-list" id="partialSelectList"></div>
-  <button class="btn-confirm" id="partialConfirmBtn"
-    style="width:100%;max-width:700px;background:linear-gradient(145deg,#2A180B,#5A3520);
-           box-shadow:0 8px 24px rgba(42,24,11,.3);display:none;"
-    onclick="goPartialPayment()">
-    선택 완료 → 결제하기
-  </button>
+  <div class="cart-summary" id="partialCartSummary">
+    <div class="cart-title">부분수령 목록</div>
+    <div class="cart-items" id="partialCartItems"></div>
+    <div class="cart-footer">
+      <div>
+        <div class="cart-total-label">선택 합계</div>
+        <div class="cart-total-price" id="partialCartTotal"></div>
+      </div>
+      <button class="btn-order" onclick="goPartialPayment()">결제하기 →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 21페이지: 부분수령 옵션 선택 ════════════════════════════════ -->
+<div class="page" id="page21">
+  <button class="back" onclick="go(20)">← 뒤로</button>
+  <h1>옵션을 선택하세요</h1>
+  <div class="selected-prod-banner" id="partialOptBanner"></div>
+  <p class="opt-subtitle">수령할 컬러 · 사이즈를 선택하세요</p>
+  <div class="opt-list" id="partialOptList"></div>
 </div>
 
 
@@ -1454,7 +1468,17 @@ function selectPickup(method) {
   }
 
   const shippingFee = (method === 'delivery' && pendingOrder.origTotal < 100000) ? 3000 : 0;
-  if (method === 'partial_confirmed') method = 'partial';
+  if (method === 'partial_confirmed') {
+    method = 'partial';
+    // partialCart 기반으로 orderItems 재구성
+    pendingOrder.orderItems = Object.values(partialCart).map(i => ({
+      ...i, lineTotal: i.price * i.qty
+    }));
+    pendingOrder.origTotal  = pendingOrder.orderItems.reduce((s, i) => s + i.lineTotal, 0);
+    const pct2 = pendingOrder.pct, rate2 = pct2 / 100;
+    pendingOrder.finalTotal = Math.round(pendingOrder.origTotal * (1 - rate2) / 100) * 100;
+    pendingOrder.disc       = pendingOrder.origTotal - pendingOrder.finalTotal;
+  }
   const payTotal    = pendingOrder.finalTotal + shippingFee;
   pendingOrder.shippingFee = shippingFee;
   pendingOrder.payTotal    = payTotal;
@@ -1559,55 +1583,154 @@ function saveTaekbaeRecipient() {
   go(1);
 }
 
-/* ── 부분수령 상품 선택 ── */
-const partialSelected = new Set();
+/* ══ 부분수령 로직 ════════════════════════════════════════════ */
+const partialCart    = {};
+const partialOptQty  = {};
+let   currentPartialGroup = null;
 
+/* ── page20: 상품 그룹 목록 ── */
 function renderPartialSelect() {
-  partialSelected.clear();
+  Object.keys(partialCart).forEach(k => delete partialCart[k]);
+
+  // basicCart를 상품번호별 그룹화
+  const groups = {};
+  Object.entries(basicCart).forEach(([key, item]) => {
+    if (!groups[item.no]) {
+      groups[item.no] = { no: item.no, name: item.name, cat: item.no[0], cartItems: {} };
+    }
+    groups[item.no].cartItems[key] = item;
+  });
+
   const list = document.getElementById('partialSelectList');
   list.innerHTML = '';
-  document.getElementById('partialConfirmBtn').style.display = 'none';
 
-  Object.entries(basicCart).forEach(([key, item]) => {
-    const sizeStr = item.size ? ' · ' + item.size : '';
-    const card = document.createElement('button');
-    card.className = 'opt-btn';
-    card.dataset.key = key;
-    card.innerHTML = `
-      <div class="pnum pnum-${item.no[0]}" style="min-width:52px;height:52px;font-size:12px;flex-shrink:0;">${item.no}</div>
-      <div class="opt-name" style="font-size:15px;">
-        <div style="font-weight:700;color:#2A180B;">${item.name}</div>
-        <div style="font-size:12px;color:#B08B6A;margin-top:3px;">${item.color}${sizeStr} · ${item.qty}개</div>
+  Object.values(groups).forEach(group => {
+    const optCount = Object.keys(group.cartItems).length;
+    const totalQty = Object.values(group.cartItems).reduce((s, i) => s + i.qty, 0);
+
+    const btn = document.createElement('button');
+    btn.className = 'opt-btn';
+    btn.innerHTML = `
+      <div class="pnum pnum-${group.cat}" style="min-width:52px;height:52px;font-size:12px;flex-shrink:0;">${group.no}</div>
+      <div class="opt-name" style="font-size:14px;">
+        <div style="font-weight:700;color:#2A180B;">${group.name}</div>
+        <div style="font-size:12px;color:#B08B6A;margin-top:3px;">${optCount}가지 옵션 · ${totalQty}개</div>
       </div>
-      <div style="flex-shrink:0;font-size:22px;color:#C4A882;" id="pcheck_${key.replace(/\|/g,'_')}">○</div>`;
-    card.addEventListener('click', () => togglePartial(key, card));
+      <div style="flex-shrink:0;font-size:20px;color:#C4A882;" id="pgrp_${group.no}">›</div>`;
+    btn.addEventListener('click', () => openPartialOptions(group));
+    list.appendChild(btn);
+  });
+
+  refreshPartialCart();
+}
+
+/* ── page21: 선택한 상품의 옵션 목록 ── */
+function openPartialOptions(group) {
+  currentPartialGroup = group;
+
+  // 초기 수량: partialCart에 있으면 그 값, 없으면 1
+  Object.entries(group.cartItems).forEach(([key]) => {
+    partialOptQty[key] = partialCart[key] ? partialCart[key].qty : 1;
+  });
+
+  document.getElementById('partialOptBanner').innerHTML = `
+    <div class="pnum pnum-${group.cat}">${group.no}</div>
+    <div class="pinfo">
+      <div class="pname">${group.name}</div>
+      <div class="pcolors">${Object.keys(group.cartItems).length}가지 옵션</div>
+    </div>`;
+
+  renderPartialOptList();
+  go(21);
+}
+
+function renderPartialOptList() {
+  const group = currentPartialGroup;
+  const list  = document.getElementById('partialOptList');
+  list.innerHTML = '';
+
+  Object.entries(group.cartItems).forEach(([key, item]) => {
+    const sizeStr = item.size ? ' · ' + item.size : '';
+    const inPart  = partialCart[key];
+    const qty     = partialOptQty[key] || 1;
+    const safeId  = key.replace(/\|/g, '_');
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#FAF5EE;border-radius:14px;padding:16px 18px;border:1.5px solid ' +
+      (inPart ? '#8C5E3E' : '#D5BFA5') + ';margin-bottom:12px;' +
+      (inPart ? 'background:#F5EAD8;' : '');
+
+    const addedBadge = inPart
+      ? `<span style="font-size:12px;font-weight:700;color:#7C4F30;padding:3px 10px;background:#EAD5BE;border-radius:20px;white-space:nowrap;">${inPart.qty}개 선택 ✓</span>`
+      : '';
+    const cancelBtn = inPart
+      ? `<button onclick="removeFromPartial('${key}')" style="height:44px;padding:0 14px;border:1.5px solid #C4A882;border-radius:10px;background:#FAF5EE;color:#8C6A50;font-size:13px;font-weight:600;cursor:pointer;">취소</button>`
+      : '';
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
+        <div>
+          <div style="font-size:17px;font-weight:700;color:#2A180B;">${item.color}${sizeStr}</div>
+          <div style="font-size:12px;color:#B08B6A;margin-top:3px;">카트 ${item.qty}개 · ${item.price.toLocaleString()}원</div>
+        </div>
+        ${addedBadge}
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="display:flex;align-items:center;gap:10px;background:#EAD5BE;border-radius:10px;padding:6px 12px;flex-shrink:0;">
+          <button onclick="changePartialQty('${key}', -1)" style="border:none;background:none;font-size:22px;cursor:pointer;color:#5A3520;font-weight:700;line-height:1;padding:0;">−</button>
+          <span id="pqty_${safeId}" style="min-width:26px;text-align:center;font-size:17px;font-weight:800;color:#2A180B;">${qty}</span>
+          <button onclick="changePartialQty('${key}', 1)" style="border:none;background:none;font-size:22px;cursor:pointer;color:#5A3520;font-weight:700;line-height:1;padding:0;">+</button>
+        </div>
+        <button onclick="addToPartial('${key}')" style="flex:1;height:44px;border:none;border-radius:10px;background:linear-gradient(145deg,#5A3520,#2A180B);color:#FAF5EE;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(42,24,11,.2);">부분수령에 추가</button>
+        ${cancelBtn}
+      </div>`;
     list.appendChild(card);
   });
 }
 
-function togglePartial(key, card) {
-  const icon = document.getElementById('pcheck_' + key.replace(/\|/g, '_'));
-  if (partialSelected.has(key)) {
-    partialSelected.delete(key);
-    card.style.borderColor = '';
-    card.style.background  = '';
-    icon.textContent = '○';
-    icon.style.color = '#C4A882';
-  } else {
-    partialSelected.add(key);
-    card.style.borderColor = '#8C5E3E';
-    card.style.background  = '#F5EAD8';
-    icon.textContent = '●';
-    icon.style.color = '#7C4F30';
-  }
-  document.getElementById('partialConfirmBtn').style.display =
-    partialSelected.size > 0 ? 'block' : 'none';
+function changePartialQty(key, delta) {
+  const item = currentPartialGroup.cartItems[key];
+  partialOptQty[key] = Math.max(1, Math.min(item.qty, (partialOptQty[key] || 1) + delta));
+  const el = document.getElementById('pqty_' + key.replace(/\|/g, '_'));
+  if (el) el.textContent = partialOptQty[key];
+}
+
+function addToPartial(key) {
+  const item = currentPartialGroup.cartItems[key];
+  const qty  = partialOptQty[key] || 1;
+  partialCart[key] = { no: item.no, name: item.name, color: item.color, size: item.size || '', price: item.price, qty };
+  renderPartialOptList();
+  refreshPartialCart();
+  go(20);
+}
+
+function removeFromPartial(key) {
+  delete partialCart[key];
+  renderPartialOptList();
+  refreshPartialCart();
+}
+
+function refreshPartialCart() {
+  const items   = Object.values(partialCart);
+  const summary = document.getElementById('partialCartSummary');
+  if (!items.length) { summary.classList.remove('show'); return; }
+  summary.classList.add('show');
+  const total = items.reduce((s, i) => s + i.price * i.qty, 0);
+  document.getElementById('partialCartItems').innerHTML = items.map(i => {
+    const sizeStr = i.size ? ` · ${i.size}` : '';
+    return `<div class="cart-chip">
+      <div class="chip-dot" style="background:${CAT_COLOR[i.no[0]]}"></div>
+      <div class="chip-info">
+        <div class="chip-name">${i.no} · ${i.color}${sizeStr}</div>
+        <div class="chip-meta">${i.qty}개 · ${(i.price * i.qty).toLocaleString()}원</div>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('partialCartTotal').textContent = total.toLocaleString() + '원';
 }
 
 function goPartialPayment() {
-  if (!partialSelected.size) return;
-  // 선택된 항목만 pendingOrder에 반영하지 않고, 전체 주문 그대로 결제 진행
-  // (부분수령 세부 로직은 추후 확장)
+  if (!Object.keys(partialCart).length) { alert('수령할 상품을 선택하세요.'); return; }
   selectPickup('partial_confirmed');
 }
 
