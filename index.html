@@ -589,8 +589,14 @@
     }
     .page { position: relative; z-index: 1; }
   </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
+<div id="loadingOverlay" style="position:fixed;inset:0;background:#FAF5EE;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:18px;">
+  <div style="width:52px;height:52px;border:5px solid #D5BFA5;border-top-color:#5A3520;border-radius:50%;animation:spin .8s linear infinite;"></div>
+  <div style="font-size:15px;font-weight:700;color:#5A3520;">데이터 불러오는 중...</div>
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
 
 <!-- ══ 1페이지: 유형 선택 ══════════════════════════════════════ -->
 <div class="page active" id="page1">
@@ -1093,8 +1099,11 @@ function finalOrder() {
   salesCounter[saleKey].qty    += totalQty;
   salesCounter[saleKey].amount  = (salesCounter[saleKey].amount || 0) + total;
   const colorSummary = Object.entries(cart).filter(([,q]) => q > 0).map(([n,q]) => `${n} ${q}개`).join(', ');
-  salesCounter[saleKey].orders.push({ name: buyerName.trim() || '-', qty: totalQty, amount: total, colors: colorSummary });
-  localStorage.setItem('ohne_sales', JSON.stringify(salesCounter));
+  const saleOrderItem = { name: buyerName.trim() || '-', qty: totalQty, amount: total, colors: colorSummary };
+  salesCounter[saleKey].orders.push(saleOrderItem);
+  const saleItems = Object.entries(cart).filter(([,q])=>q>0).map(([n,q])=>({name:n,qty:q,price:DISCOUNT_ITEMS[n].price}));
+  db.from('sale_transactions').insert({ buyer_name: buyerName.trim()||'-', items: saleItems, qty: totalQty, amount: total })
+    .then(({error})=>{ if(error) console.error('Supabase 할인상품 저장 오류:',error); });
 
   // 장바구니 초기화
   for (const k of Object.keys(cart)) cart[k] = 0;
@@ -1396,11 +1405,11 @@ let pendingOrder = null;
 
 let deliveryMode     = false;
 const deliveryCart   = {};
-const deliveryOrders = JSON.parse(localStorage.getItem('ohne_delivery') || '[]');
+const deliveryOrders = [];
 
-/* ── 판매 카운터 (localStorage 유지) ── */
-const salesCounter  = JSON.parse(localStorage.getItem('ohne_sales')   || '{}');
-const paymentLog    = JSON.parse(localStorage.getItem('ohne_payment') || '[]');
+/* ── 판매 카운터 (Supabase에서 로드) ── */
+const salesCounter = {};
+const paymentLog   = [];
 // salesCounter 구조: { "T1|khaki": {no, name, color, cat, qty} }
 
 
@@ -1533,11 +1542,20 @@ function completeSale(payMethod) {
     }
   });
 
-  localStorage.setItem('ohne_sales', JSON.stringify(salesCounter));
+  // Supabase 저장
+  db.from('transactions').insert({
+    items:        pendingOrder.orderItems,
+    pay_method:   payMethod,
+    pct:          pendingOrder.pct,
+    orig_total:   pendingOrder.origTotal,
+    final_total:  pendingOrder.finalTotal,
+    disc:         pendingOrder.disc,
+    shipping_fee: pendingOrder.shippingFee,
+    pay_total:    pendingOrder.payTotal,
+    pickup_method:pendingOrder.pickupMethod
+  }).then(({error})=>{ if(error) console.error('Supabase 결제 저장 오류:',error); });
 
-  // 결제 수단 로그
   paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품' });
-  localStorage.setItem('ohne_payment', JSON.stringify(paymentLog));
 
   const methodLabel = payMethod === 'card' ? '카드' : '계좌이체';
   const pickupMethod = pendingOrder.pickupMethod;
@@ -1576,7 +1594,7 @@ function goBackFromPage8() {
 }
 
 /* ── 택배수령 수취인 저장 ── */
-const taekbaeOrders = JSON.parse(localStorage.getItem('ohne_taekbae') || '[]');
+const taekbaeOrders = [];
 
 function saveTaekbaeRecipient() {
   const name  = document.getElementById('taekbaeNameInput').value.trim();
@@ -1584,7 +1602,8 @@ function saveTaekbaeRecipient() {
   if (!name)  { alert('받는 분 성함을 입력하세요.'); return; }
   if (phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
   taekbaeOrders.push({ name, phone, date: new Date().toLocaleDateString('ko-KR') });
-  localStorage.setItem('ohne_taekbae', JSON.stringify(taekbaeOrders));
+  db.from('taekbae_orders').insert({ name, phone })
+    .then(({error})=>{ if(error) console.error('Supabase 택배 저장 오류:',error); });
   Object.keys(basicCart).forEach(k => delete basicCart[k]);
   refreshBasicCart();
   alert(`저장 완료!\n${name} (${phone})`);
@@ -1751,8 +1770,15 @@ function goSales() { go(9); }
 
 function resetAllData() {
   if (!confirm('판매 데이터를 전부 삭제할까요?\n이 작업은 되돌릴 수 없습니다.')) return;
-  ['ohne_sales','ohne_delivery','ohne_payment'].forEach(k => localStorage.removeItem(k));
-  location.reload();
+  Promise.all([
+    db.from('transactions').delete().gte('id',0),
+    db.from('sale_transactions').delete().gte('id',0),
+    db.from('delivery_orders').delete().gte('id',0),
+    db.from('taekbae_orders').delete().gte('id',0),
+  ]).then(()=>{
+    ['ohne_sales','ohne_delivery','ohne_payment'].forEach(k=>localStorage.removeItem(k));
+    location.reload();
+  });
 }
 
 function goPaymentDetail() {
@@ -2033,8 +2059,10 @@ function saveDeliveryOrder() {
   const phone     = document.getElementById('deliveryPhoneInput').value.trim();
   if (!recipient) { alert('받는 분 성함을 입력하세요.'); return; }
   if (!phone || phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
-  deliveryOrders.push({ recipient, phone, items: Object.values(deliveryCart) });
-  localStorage.setItem('ohne_delivery', JSON.stringify(deliveryOrders));
+  const deliveryItems = Object.values(deliveryCart);
+  deliveryOrders.push({ recipient, phone, items: deliveryItems });
+  db.from('delivery_orders').insert({ recipient, phone, items: deliveryItems })
+    .then(({error})=>{ if(error) console.error('Supabase 발송 저장 오류:',error); });
   Object.keys(deliveryCart).forEach(k => delete deliveryCart[k]);
   document.getElementById('deliveryCartSummary').classList.remove('show');
 
@@ -2124,6 +2152,64 @@ function goBasicDetail() {
   }
   go(12);
 }
+
+/* ══ Supabase 설정 ════════════════════════════════════════════ */
+const { createClient } = supabase;
+const db = createClient(
+  'https://stqclchbmvzdvqodamio.supabase.co',
+  'sb_publishable_8F2UiYEl0TsmO_ZV_KHcUA_h4uOnoNH'
+);
+
+async function syncFromSupabase() {
+  try {
+    const [
+      { data: txns },
+      { data: saleTxns },
+      { data: dels },
+      { data: tbs }
+    ] = await Promise.all([
+      db.from('transactions').select('*').order('created_at'),
+      db.from('sale_transactions').select('*').order('created_at'),
+      db.from('delivery_orders').select('*').order('created_at'),
+      db.from('taekbae_orders').select('*').order('created_at'),
+    ]);
+
+    if (txns) txns.forEach(txn => {
+      (txn.items || []).forEach(i => {
+        const key = `${i.no}|${i.color}|${i.size||''}`;
+        if (!salesCounter[key])
+          salesCounter[key] = { no:i.no, name:i.name, color:i.color, size:i.size||'', cat:i.no[0], qty:0, amount:0 };
+        salesCounter[key].qty    += i.qty;
+        salesCounter[key].amount += i.lineTotal || (i.price * i.qty);
+      });
+      paymentLog.push({ type:'basic', method:txn.pay_method, amount:txn.pay_total, label:'일반상품' });
+    });
+
+    if (saleTxns && saleTxns.length) {
+      salesCounter['__sale__'] = { isSale:true, qty:0, amount:0, orders:[] };
+      saleTxns.forEach(t => {
+        salesCounter['__sale__'].qty    += t.qty;
+        salesCounter['__sale__'].amount += t.amount;
+        const colors = (t.items||[]).map(i=>`${i.name} ${i.qty}개`).join(', ');
+        salesCounter['__sale__'].orders.push({ name:t.buyer_name, qty:t.qty, amount:t.amount, colors });
+      });
+    }
+
+    if (dels) dels.forEach(d => deliveryOrders.push({ recipient:d.recipient, phone:d.phone, items:d.items||[] }));
+    if (tbs)  tbs.forEach(t  => taekbaeOrders.push({ name:t.name, phone:t.phone, date:new Date(t.created_at).toLocaleDateString('ko-KR') }));
+
+  } catch(e) {
+    console.warn('Supabase 로드 실패, localStorage 폴백:', e);
+    Object.assign(salesCounter, JSON.parse(localStorage.getItem('ohne_sales')||'{}'));
+    paymentLog.push(...JSON.parse(localStorage.getItem('ohne_payment')||'[]'));
+    deliveryOrders.push(...JSON.parse(localStorage.getItem('ohne_delivery')||'[]'));
+    taekbaeOrders.push(...JSON.parse(localStorage.getItem('ohne_taekbae')||'[]'));
+  } finally {
+    document.getElementById('loadingOverlay').style.display = 'none';
+  }
+}
+
+syncFromSupabase().then(() => go(1));
 </script>
 
 </body>
