@@ -589,7 +589,6 @@
     }
     .page { position: relative; z-index: 1; }
   </style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 <div id="loadingOverlay" style="position:fixed;inset:0;background:#FAF5EE;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;gap:18px;">
@@ -1102,8 +1101,7 @@ function finalOrder() {
   const saleOrderItem = { name: buyerName.trim() || '-', qty: totalQty, amount: total, colors: colorSummary };
   salesCounter[saleKey].orders.push(saleOrderItem);
   const saleItems = Object.entries(cart).filter(([,q])=>q>0).map(([n,q])=>({name:n,qty:q,price:DISCOUNT_ITEMS[n].price}));
-  db.from('sale_transactions').insert({ buyer_name: buyerName.trim()||'-', items: saleItems, qty: totalQty, amount: total })
-    .then(({error})=>{ if(error) console.error('Supabase 할인상품 저장 오류:',error); });
+  sbInsert('sale_transactions', { buyer_name: buyerName.trim()||'-', items: saleItems, qty: totalQty, amount: total });
 
   // 장바구니 초기화
   for (const k of Object.keys(cart)) cart[k] = 0;
@@ -1545,7 +1543,7 @@ function completeSale(payMethod) {
   });
 
   // Supabase 저장
-  db.from('transactions').insert({
+  sbInsert('transactions', {
     items:        pendingOrder.orderItems,
     pay_method:   payMethod,
     pct:          pendingOrder.pct,
@@ -1555,7 +1553,7 @@ function completeSale(payMethod) {
     shipping_fee: pendingOrder.shippingFee,
     pay_total:    pendingOrder.payTotal,
     pickup_method:pendingOrder.pickupMethod
-  }).then(({error})=>{ if(error) console.error('Supabase 결제 저장 오류:',error); });
+  });
 
   paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품' });
 
@@ -1604,8 +1602,7 @@ function saveTaekbaeRecipient() {
   if (!name)  { alert('받는 분 성함을 입력하세요.'); return; }
   if (phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
   taekbaeOrders.push({ name, phone, date: new Date().toLocaleDateString('ko-KR') });
-  db.from('taekbae_orders').insert({ name, phone })
-    .then(({error})=>{ if(error) console.error('Supabase 택배 저장 오류:',error); });
+  sbInsert('taekbae_orders', { name, phone });
   Object.keys(basicCart).forEach(k => delete basicCart[k]);
   refreshBasicCart();
   alert(`저장 완료!\n${name} (${phone})`);
@@ -1774,10 +1771,10 @@ function goSales() { go(9); }
 function resetAllData() {
   if (!confirm('판매 데이터를 전부 삭제할까요?\n이 작업은 되돌릴 수 없습니다.')) return;
   Promise.all([
-    db.from('transactions').delete().gte('id',0),
-    db.from('sale_transactions').delete().gte('id',0),
-    db.from('delivery_orders').delete().gte('id',0),
-    db.from('taekbae_orders').delete().gte('id',0),
+    sbDeleteAll('transactions'),
+    sbDeleteAll('sale_transactions'),
+    sbDeleteAll('delivery_orders'),
+    sbDeleteAll('taekbae_orders'),
   ]).then(()=>{
     ['ohne_sales','ohne_delivery','ohne_payment','ohne_taekbae'].forEach(k=>localStorage.removeItem(k));
     location.reload();
@@ -2064,8 +2061,7 @@ function saveDeliveryOrder() {
   if (!phone || phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
   const deliveryItems = Object.values(deliveryCart);
   deliveryOrders.push({ recipient, phone, items: deliveryItems });
-  db.from('delivery_orders').insert({ recipient, phone, items: deliveryItems })
-    .then(({error})=>{ if(error) console.error('Supabase 발송 저장 오류:',error); });
+  sbInsert('delivery_orders', { recipient, phone, items: deliveryItems });
   Object.keys(deliveryCart).forEach(k => delete deliveryCart[k]);
   document.getElementById('deliveryCartSummary').classList.remove('show');
 
@@ -2156,32 +2152,34 @@ function goBasicDetail() {
   go(12);
 }
 
-/* ══ Supabase 설정 ════════════════════════════════════════════ */
-const { createClient } = supabase;
-const db = createClient(
-  'https://stqclchbmvzdvqodamio.supabase.co',
-  'sb_publishable_8F2UiYEl0TsmO_ZV_KHcUA_h4uOnoNH'
-);
+/* ══ Supabase REST API 설정 ════════════════════════════════════ */
+const SB_URL = 'https://stqclchbmvzdvqodamio.supabase.co';
+const SB_KEY = 'sb_publishable_8F2UiYEl0TsmO_ZV_KHcUA_h4uOnoNH';
+const SB_HDR = { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Content-Type': 'application/json', 'Prefer': 'return=representation' };
+
+function sbGet(table) {
+  return fetch(`${SB_URL}/rest/v1/${table}?select=*&order=created_at`, { headers: SB_HDR }).then(r => r.json());
+}
+function sbInsert(table, data) {
+  return fetch(`${SB_URL}/rest/v1/${table}`, { method:'POST', headers: SB_HDR, body: JSON.stringify(data) })
+    .then(r => r.json())
+    .then(res => { if (res?.code) console.error(`Supabase ${table} 저장 오류:`, res); return res; })
+    .catch(e => console.error(`Supabase ${table} 저장 실패:`, e));
+}
+function sbDeleteAll(table) {
+  return fetch(`${SB_URL}/rest/v1/${table}?id=not.is.null`, { method:'DELETE', headers: SB_HDR });
+}
 
 async function syncFromSupabase() {
   try {
-    const [
-      { data: txns,     error: e1 },
-      { data: saleTxns, error: e2 },
-      { data: dels,     error: e3 },
-      { data: tbs,      error: e4 }
-    ] = await Promise.all([
-      db.from('transactions').select('*').order('created_at'),
-      db.from('sale_transactions').select('*').order('created_at'),
-      db.from('delivery_orders').select('*').order('created_at'),
-      db.from('taekbae_orders').select('*').order('created_at'),
+    const [txns, saleTxns, dels, tbs] = await Promise.all([
+      sbGet('transactions'),
+      sbGet('sale_transactions'),
+      sbGet('delivery_orders'),
+      sbGet('taekbae_orders'),
     ]);
-    if (e1) console.error('transactions 로드 오류:', e1);
-    if (e2) console.error('sale_transactions 로드 오류:', e2);
-    if (e3) console.error('delivery_orders 로드 오류:', e3);
-    if (e4) console.error('taekbae_orders 로드 오류:', e4);
 
-    if (txns) txns.forEach(txn => {
+    if (Array.isArray(txns)) txns.forEach(txn => {
       (txn.items || []).forEach(i => {
         const key = `${i.no}|${i.color}|${i.size||''}`;
         if (!salesCounter[key])
@@ -2192,7 +2190,7 @@ async function syncFromSupabase() {
       paymentLog.push({ type:'basic', method:txn.pay_method, amount:txn.pay_total, label:'일반상품' });
     });
 
-    if (saleTxns && saleTxns.length) {
+    if (Array.isArray(saleTxns) && saleTxns.length) {
       salesCounter['__sale__'] = { isSale:true, qty:0, amount:0, orders:[] };
       saleTxns.forEach(t => {
         salesCounter['__sale__'].qty    += t.qty;
@@ -2202,8 +2200,8 @@ async function syncFromSupabase() {
       });
     }
 
-    if (dels) dels.forEach(d => deliveryOrders.push({ recipient:d.recipient, phone:d.phone, items:d.items||[] }));
-    if (tbs)  tbs.forEach(t  => taekbaeOrders.push({ name:t.name, phone:t.phone, date:new Date(t.created_at).toLocaleDateString('ko-KR') }));
+    if (Array.isArray(dels)) dels.forEach(d => deliveryOrders.push({ recipient:d.recipient, phone:d.phone, items:d.items||[] }));
+    if (Array.isArray(tbs))  tbs.forEach(t  => taekbaeOrders.push({ name:t.name, phone:t.phone, date:new Date(t.created_at).toLocaleDateString('ko-KR') }));
 
   } catch(e) {
     console.warn('Supabase 로드 실패, localStorage 폴백:', e);
