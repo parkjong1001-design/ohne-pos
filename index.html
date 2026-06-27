@@ -1853,8 +1853,16 @@ async function goTxHistory() {
     const dt   = new Date(t.created_at);
     const date = dt.toLocaleDateString('ko-KR');
     const time = dt.toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit' });
-    const tag  = t._type === 'sale' ? '할인상품' : '일반상품';
-    const tagColor = t._type === 'sale' ? '#EF4444' : '#5A3520';
+    let tag, tagColor;
+    if (t._type === 'sale') {
+      tag = '할인상품'; tagColor = '#EF4444';
+    } else if (t.pickup_method === 'delivery') {
+      tag = '택배수령'; tagColor = '#4A6890';
+    } else if (t.pickup_method === 'partial') {
+      tag = '부분수령'; tagColor = '#7C4F30';
+    } else {
+      tag = '현장수령'; tagColor = '#5A3520';
+    }
 
     let itemsHtml = '';
     if (t._type === 'basic' && Array.isArray(t.items)) {
