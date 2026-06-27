@@ -2302,6 +2302,12 @@ function sbDeleteAll(table) {
 
 async function syncFromSupabase() {
   try {
+    // 재호출 시 중복 방지: 기존 데이터 초기화
+    Object.keys(salesCounter).forEach(k => delete salesCounter[k]);
+    paymentLog.length = 0;
+    deliveryOrders.length = 0;
+    taekbaeOrders.length = 0;
+
     const [txns, saleTxns, dels, tbs] = await Promise.all([
       sbGet('transactions'),
       sbGet('sale_transactions'),
