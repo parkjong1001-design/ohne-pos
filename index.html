@@ -1636,14 +1636,10 @@ function completeSale(payMethod, buyerName) {
     renderPartialSelect();
     go(20);
   } else {
-    // 현장수령: 개별발송 여부 확인 후 종료
-    if (Object.keys(basicCart).length && confirm('개별발송이 필요한가요?')) {
-      startDeliveryAfterPay();
-    } else {
-      Object.keys(basicCart).forEach(k => delete basicCart[k]);
-      refreshBasicCart();
-      go(1);
-    }
+    // 현장수령: 카트 정리 후 메인으로
+    Object.keys(basicCart).forEach(k => delete basicCart[k]);
+    refreshBasicCart();
+    go(1);
   }
 }
 
