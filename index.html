@@ -813,8 +813,29 @@
   <div class="order-list" id="orderItemList"></div>
   <div class="order-total-box" id="orderTotalBox"></div>
   <div style="display:flex;gap:12px;width:100%;max-width:700px;">
-    <button class="btn-complete" onclick="completeSale('card')" style="background:linear-gradient(145deg,#5A3520,#2A180B);box-shadow:0 8px 24px rgba(42,24,11,.3);">💳 카드 결제</button>
-    <button class="btn-complete" onclick="completeSale('bank')" style="background:linear-gradient(145deg,#4A6890,#2E4F70);box-shadow:0 8px 24px rgba(46,79,112,.3);">🏦 계좌 이체</button>
+    <button class="btn-complete" onclick="startPayment('card')" style="background:linear-gradient(145deg,#5A3520,#2A180B);box-shadow:0 8px 24px rgba(42,24,11,.3);">💳 카드 결제</button>
+    <button class="btn-complete" onclick="startPayment('bank')" style="background:linear-gradient(145deg,#4A6890,#2E4F70);box-shadow:0 8px 24px rgba(46,79,112,.3);">🏦 계좌 이체</button>
+  </div>
+</div>
+
+<!-- ══ 23페이지: 현장수령 입금자명 입력 ══════════════════════════ -->
+<div class="page" id="page23">
+  <button class="back" onclick="go(8)">← 뒤로</button>
+  <h1>입금자 확인</h1>
+  <div class="qty-box" style="max-width:500px;width:100%;gap:20px;">
+    <div style="width:100%;display:flex;flex-direction:column;gap:8px;">
+      <span style="font-size:14px;font-weight:700;color:#5A3520;">입금자 성함</span>
+      <input id="onsiteBuyerInput" type="text" placeholder="성함을 입력하세요"
+        style="width:100%;height:58px;border:2px solid #D5BFA5;border-radius:12px;
+               padding:0 18px;font-size:17px;font-weight:600;outline:none;background:#FAF5EE;color:#2A180B;"
+        onfocus="this.style.borderColor='#8C5E3E'" onblur="this.style.borderColor='#D5BFA5'"
+        onkeydown="if(event.key==='Enter') confirmOnsitePayment()"/>
+    </div>
+    <button class="btn-confirm" id="onsitePayBtn"
+      style="width:100%;background:linear-gradient(145deg,#5A3520,#2A180B);box-shadow:0 8px 24px rgba(42,24,11,.3);"
+      onclick="confirmOnsitePayment()">
+      결제 완료
+    </button>
   </div>
 </div>
 
@@ -1546,7 +1567,29 @@ function renderPage8() {
 /* ── 정산완료: 카운터에 저장 후 장바구니 초기화 ── */
 let afterPayPage = 1;
 
-function completeSale(payMethod) {
+let pendingPayMethod = null;
+
+function startPayment(method) {
+  if (!pendingOrder) return;
+  if (pendingOrder.pickupMethod === 'onsite') {
+    // 현장수령: 입금자명 먼저 입력
+    pendingPayMethod = method;
+    document.getElementById('onsiteBuyerInput').value = '';
+    document.getElementById('onsitePayBtn').textContent =
+      method === 'card' ? '카드 결제 완료' : '계좌 이체 완료';
+    go(23);
+  } else {
+    completeSale(method, '');
+  }
+}
+
+function confirmOnsitePayment() {
+  const name = document.getElementById('onsiteBuyerInput').value.trim();
+  if (!name) { alert('입금자 성함을 입력하세요.'); return; }
+  completeSale(pendingPayMethod, name);
+}
+
+function completeSale(payMethod, buyerName) {
   if (!pendingOrder) return;
 
   pendingOrder.orderItems.forEach(i => {
@@ -1569,7 +1612,8 @@ function completeSale(payMethod) {
     disc:         pendingOrder.disc,
     shipping_fee: pendingOrder.shippingFee,
     pay_total:    pendingOrder.payTotal,
-    pickup_method:pendingOrder.pickupMethod
+    pickup_method:pendingOrder.pickupMethod,
+    buyer_name:   buyerName || ''
   });
 
   paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품' });
@@ -1817,7 +1861,8 @@ async function goTxHistory() {
 
     let itemsHtml = '';
     if (t._type === 'basic' && Array.isArray(t.items)) {
-      itemsHtml = t.items.map(i =>
+      const buyerLine = t.buyer_name ? `<div style="font-size:12px;font-weight:700;color:#5A3520;margin-bottom:3px;">입금자: ${t.buyer_name}</div>` : '';
+      itemsHtml = buyerLine + t.items.map(i =>
         `<div style="font-size:12px;color:#8C6A50;">${i.no} ${i.name} · ${i.color}${i.size ? ' · '+i.size : ''} · ${i.qty}개</div>`
       ).join('');
     } else if (t._type === 'sale') {
