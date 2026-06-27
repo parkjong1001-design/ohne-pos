@@ -1541,7 +1541,7 @@ function renderPage8() {
         <div class="oi-name">${i.name}</div>
         <div class="oi-sub">${i.color}${sizeStr} · ${i.qty}개 × ${discUnit.toLocaleString()}원</div>
       </div>
-      <div class="oi-price">${i.lineTotal.toLocaleString()}원</div>
+      <div class="oi-price">${(discUnit * i.qty).toLocaleString()}원</div>
     </div>`;
   }).join('');
 
@@ -1588,13 +1588,15 @@ async function completeSale(payMethod, buyerName) {
   if (isPaymentProcessing) return;
   isPaymentProcessing = true;
 
+  const _rate = pendingOrder.pct / 100;
   pendingOrder.orderItems.forEach(i => {
     const key = `${i.no}|${i.color}|${i.size || ''}`;
+    const discAmt = Math.round(i.price * (1 - _rate) / 100) * 100 * i.qty;
     if (salesCounter[key]) {
       salesCounter[key].qty    += i.qty;
-      salesCounter[key].amount  = (salesCounter[key].amount || 0) + i.lineTotal;
+      salesCounter[key].amount  = (salesCounter[key].amount || 0) + discAmt;
     } else {
-      salesCounter[key] = { no: i.no, name: i.name, color: i.color, size: i.size || '', cat: i.no[0], qty: i.qty, amount: i.lineTotal };
+      salesCounter[key] = { no: i.no, name: i.name, color: i.color, size: i.size || '', cat: i.no[0], qty: i.qty, amount: discAmt };
     }
   });
 
@@ -1611,7 +1613,12 @@ async function completeSale(payMethod, buyerName) {
     pickup_method:pendingOrder.pickupMethod,
     buyer_name:   buyerName || ''
   });
-  lastTxId = Array.isArray(txResult) ? (txResult[0]?.id || null) : null;
+  if (!Array.isArray(txResult) || txResult.length === 0) {
+    isPaymentProcessing = false;
+    alert('저장 오류가 발생했습니다.\n네트워크를 확인하고 다시 시도해주세요.');
+    return;
+  }
+  lastTxId = txResult[0]?.id || null;
 
   paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품' });
 
@@ -1654,7 +1661,7 @@ function saveTaekbaeRecipient() {
   const name  = document.getElementById('taekbaeNameInput').value.trim();
   const phone = document.getElementById('taekbaePhoneInput').value.trim();
   if (!name)  { alert('받는 분 성함을 입력하세요.'); return; }
-  if (phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
+  if (phone.length !== 4) { alert('전화번호 뒷 4자리를 정확히 입력하세요.'); return; }
   taekbaeOrders.push({ name, phone, date: new Date().toLocaleDateString('ko-KR') });
   sbInsert('taekbae_orders', { name, phone, transaction_id: lastTxId });
   basicCartLocked = false;
@@ -1834,10 +1841,16 @@ async function goTxHistory() {
   list.innerHTML = '<div style="text-align:center;color:#B08B6A;padding:40px 0;">불러오는 중...</div>';
   go(22);
 
-  const [txns, saleTxns] = await Promise.all([
-    sbGet('transactions'),
-    sbGet('sale_transactions'),
-  ]);
+  let txns, saleTxns;
+  try {
+    [txns, saleTxns] = await Promise.all([
+      sbGet('transactions'),
+      sbGet('sale_transactions'),
+    ]);
+  } catch(e) {
+    list.innerHTML = '<div style="text-align:center;color:#EF4444;padding:40px 0;">네트워크 오류. 다시 시도해주세요.</div>';
+    return;
+  }
 
   const all = [
     ...(Array.isArray(txns) ? txns.map(t => ({ ...t, _type: 'basic' })) : []),
@@ -2207,7 +2220,7 @@ function saveDeliveryOrder() {
   const recipient = document.getElementById('deliveryRecipientInput').value.trim();
   const phone     = document.getElementById('deliveryPhoneInput').value.trim();
   if (!recipient) { alert('받는 분 성함을 입력하세요.'); return; }
-  if (!phone || phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
+  if (!phone || phone.length !== 4) { alert('전화번호 뒷 4자리를 정확히 입력하세요.'); return; }
   const deliveryItems = Object.values(deliveryCart);
   deliveryOrders.push({ recipient, phone, items: deliveryItems });
   sbInsert('delivery_orders', { recipient, phone, items: deliveryItems, transaction_id: lastTxId });
@@ -2355,12 +2368,14 @@ async function syncFromSupabase() {
     ]);
 
     if (Array.isArray(txns)) txns.forEach(txn => {
+      const rate = (txn.pct || 0) / 100;
       (txn.items || []).forEach(i => {
         const key = `${i.no}|${i.color}|${i.size||''}`;
+        const discAmt = Math.round(i.price * (1 - rate) / 100) * 100 * (i.qty || 1);
         if (!salesCounter[key])
           salesCounter[key] = { no:i.no, name:i.name, color:i.color, size:i.size||'', cat:i.no[0], qty:0, amount:0 };
         salesCounter[key].qty    += i.qty;
-        salesCounter[key].amount += i.lineTotal || (i.price * i.qty);
+        salesCounter[key].amount += discAmt;
       });
       paymentLog.push({ type:'basic', method:txn.pay_method, amount:txn.pay_total, label:'일반상품' });
     });
