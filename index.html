@@ -1474,6 +1474,7 @@ function selectPickup(method) {
   if (!pendingOrder) return;
 
   if (method === 'partial') {
+    Object.keys(partialCart).forEach(k => delete partialCart[k]);
     renderPartialSelect();
     go(20);
     return;
@@ -1620,7 +1621,6 @@ let   currentPartialGroup = null;
 
 /* ── page20: 상품 그룹 목록 ── */
 function renderPartialSelect() {
-  Object.keys(partialCart).forEach(k => delete partialCart[k]);
 
   // basicCart를 상품번호별 그룹화
   const groups = {};
