@@ -1566,8 +1566,8 @@ function renderPage8() {
 
 /* ── 정산완료: 카운터에 저장 후 장바구니 초기화 ── */
 let afterPayPage = 1;
-
 let pendingPayMethod = null;
+let lastTxId = null;
 
 function startPayment(method) {
   if (!pendingOrder) return;
@@ -1589,7 +1589,7 @@ function confirmOnsitePayment() {
   completeSale(pendingPayMethod, name);
 }
 
-function completeSale(payMethod, buyerName) {
+async function completeSale(payMethod, buyerName) {
   if (!pendingOrder) return;
 
   pendingOrder.orderItems.forEach(i => {
@@ -1603,7 +1603,7 @@ function completeSale(payMethod, buyerName) {
   });
 
   // Supabase 저장
-  sbInsert('transactions', {
+  const txResult = await sbInsert('transactions', {
     items:        pendingOrder.orderItems,
     pay_method:   payMethod,
     pct:          pendingOrder.pct,
@@ -1615,6 +1615,7 @@ function completeSale(payMethod, buyerName) {
     pickup_method:pendingOrder.pickupMethod,
     buyer_name:   buyerName || ''
   });
+  lastTxId = Array.isArray(txResult) ? (txResult[0]?.id || null) : null;
 
   paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품' });
 
@@ -1656,7 +1657,7 @@ function saveTaekbaeRecipient() {
   if (!name)  { alert('받는 분 성함을 입력하세요.'); return; }
   if (phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
   taekbaeOrders.push({ name, phone, date: new Date().toLocaleDateString('ko-KR') });
-  sbInsert('taekbae_orders', { name, phone });
+  sbInsert('taekbae_orders', { name, phone, transaction_id: lastTxId });
   Object.keys(basicCart).forEach(k => delete basicCart[k]);
   refreshBasicCart();
   alert(`저장 완료!\n${name} (${phone})`);
@@ -1888,13 +1889,13 @@ async function goTxHistory() {
 async function deleteTx(id, type) {
   if (!confirm('이 거래를 삭제할까요?')) return;
   const table = type === 'sale' ? 'sale_transactions' : 'transactions';
-  await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, { method:'DELETE', headers: SB_HDR });
+  await Promise.all([
+    fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, { method:'DELETE', headers: SB_HDR }),
+    fetch(`${SB_URL}/rest/v1/delivery_orders?transaction_id=eq.${id}`, { method:'DELETE', headers: SB_HDR }),
+    fetch(`${SB_URL}/rest/v1/taekbae_orders?transaction_id=eq.${id}`, { method:'DELETE', headers: SB_HDR }),
+  ]);
 
-  // 인메모리 재구성
-  Object.keys(salesCounter).forEach(k => delete salesCounter[k]);
-  paymentLog.length = 0;
   await syncFromSupabase();
-
   goTxHistory();
 }
 
@@ -2191,7 +2192,7 @@ function saveDeliveryOrder() {
   if (!phone || phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
   const deliveryItems = Object.values(deliveryCart);
   deliveryOrders.push({ recipient, phone, items: deliveryItems });
-  sbInsert('delivery_orders', { recipient, phone, items: deliveryItems });
+  sbInsert('delivery_orders', { recipient, phone, items: deliveryItems, transaction_id: lastTxId });
   Object.keys(deliveryCart).forEach(k => delete deliveryCart[k]);
   document.getElementById('deliveryCartSummary').classList.remove('show');
 
