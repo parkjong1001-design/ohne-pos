@@ -835,7 +835,16 @@
     <button class="btn-lg btn-basic" onclick="goBasicDetail()">일반상품</button>
   </div>
   <button class="btn-lg" style="width:100%;max-width:700px;height:80px;font-size:18px;background:linear-gradient(145deg,#4A6890,#2E4F70);box-shadow:0 8px 24px rgba(46,79,112,.3);border:none;border-radius:16px;color:#FAF5EE;font-weight:700;cursor:pointer;" onclick="goPaymentDetail()">💳 결제수단별 매출</button>
+  <button onclick="goTxHistory()" style="width:100%;max-width:700px;margin-top:8px;padding:16px;border-radius:14px;border:2px solid #8C5E3E;background:none;color:#8C5E3E;font-size:15px;font-weight:700;cursor:pointer;">거래 내역 · 잘못된 건 삭제</button>
   <button onclick="resetAllData()" style="width:100%;max-width:700px;margin-top:8px;padding:16px;border-radius:14px;border:2px dashed #DC2626;background:none;color:#DC2626;font-size:15px;font-weight:700;cursor:pointer;">🗑️ 판매 데이터 전체 초기화</button>
+</div>
+
+<!-- ══ 22페이지: 거래 내역 ════════════════════════════════════════ -->
+<div class="page" id="page22" style="justify-content:flex-start;padding-top:0;min-height:100vh;gap:12px;">
+  <button class="back" onclick="go(9)" style="margin-top:24px;">← 뒤로</button>
+  <h1 style="margin-bottom:0;">거래 내역</h1>
+  <p class="opt-subtitle" style="margin-top:0;">삭제할 거래 건의 × 버튼을 누르세요</p>
+  <div id="txHistoryList" style="width:100%;max-width:700px;display:flex;flex-direction:column;gap:10px;"></div>
 </div>
 
 <!-- ══ 11페이지: 할인상품 판매 현황 ══════════════════════════════ -->
@@ -1778,6 +1787,76 @@ function goPartialPayment() {
 /* ── 판매 현황 페이지 렌더링 ── */
 function goSales() { go(9); }
 
+/* ── 거래 내역 · 삭제 ── */
+async function goTxHistory() {
+  const list = document.getElementById('txHistoryList');
+  list.innerHTML = '<div style="text-align:center;color:#B08B6A;padding:40px 0;">불러오는 중...</div>';
+  go(22);
+
+  const [txns, saleTxns] = await Promise.all([
+    sbGet('transactions'),
+    sbGet('sale_transactions'),
+  ]);
+
+  const all = [
+    ...(Array.isArray(txns) ? txns.map(t => ({ ...t, _type: 'basic' })) : []),
+    ...(Array.isArray(saleTxns) ? saleTxns.map(t => ({ ...t, _type: 'sale' })) : []),
+  ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  if (!all.length) {
+    list.innerHTML = '<div style="text-align:center;color:#B08B6A;padding:40px 0;">거래 내역이 없습니다</div>';
+    return;
+  }
+
+  list.innerHTML = all.map(t => {
+    const dt   = new Date(t.created_at);
+    const date = dt.toLocaleDateString('ko-KR');
+    const time = dt.toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit' });
+    const tag  = t._type === 'sale' ? '할인상품' : '일반상품';
+    const tagColor = t._type === 'sale' ? '#EF4444' : '#5A3520';
+
+    let itemsHtml = '';
+    if (t._type === 'basic' && Array.isArray(t.items)) {
+      itemsHtml = t.items.map(i =>
+        `<div style="font-size:12px;color:#8C6A50;">${i.no} ${i.name} · ${i.color}${i.size ? ' · '+i.size : ''} · ${i.qty}개</div>`
+      ).join('');
+    } else if (t._type === 'sale') {
+      itemsHtml = `<div style="font-size:12px;color:#8C6A50;">입금자: ${t.buyer_name} · ${t.qty}개</div>`;
+    }
+
+    const amount = t._type === 'basic' ? t.pay_total : t.amount;
+    const method = t._type === 'basic' ? (t.pay_method === 'card' ? '카드' : '계좌') : '';
+
+    return `
+    <div style="background:#FAF5EE;border-radius:14px;padding:14px 16px;border:1.5px solid #D5BFA5;display:flex;align-items:flex-start;gap:12px;">
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+          <span style="font-size:11px;font-weight:700;color:${tagColor};background:${tagColor}18;border-radius:6px;padding:2px 8px;">${tag}</span>
+          ${method ? `<span style="font-size:11px;color:#8C6A50;">${method}</span>` : ''}
+          <span style="font-size:11px;color:#B08B6A;margin-left:auto;">${date} ${time}</span>
+        </div>
+        ${itemsHtml}
+        <div style="font-size:16px;font-weight:800;color:#2A180B;margin-top:6px;">${(amount||0).toLocaleString()}원</div>
+      </div>
+      <button onclick="deleteTx('${t.id}','${t._type}')"
+        style="flex-shrink:0;width:34px;height:34px;border:none;border-radius:50%;background:#FEE2E2;color:#DC2626;font-size:18px;font-weight:700;cursor:pointer;line-height:1;">×</button>
+    </div>`;
+  }).join('');
+}
+
+async function deleteTx(id, type) {
+  if (!confirm('이 거래를 삭제할까요?')) return;
+  const table = type === 'sale' ? 'sale_transactions' : 'transactions';
+  await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${id}`, { method:'DELETE', headers: SB_HDR });
+
+  // 인메모리 재구성
+  Object.keys(salesCounter).forEach(k => delete salesCounter[k]);
+  paymentLog.length = 0;
+  await syncFromSupabase();
+
+  goTxHistory();
+}
+
 function resetAllData() {
   if (!confirm('판매 데이터를 전부 삭제할까요?\n이 작업은 되돌릴 수 없습니다.')) return;
   Promise.all([
@@ -2220,7 +2299,8 @@ async function syncFromSupabase() {
     deliveryOrders.push(...JSON.parse(localStorage.getItem('ohne_delivery')||'[]'));
     taekbaeOrders.push(...JSON.parse(localStorage.getItem('ohne_taekbae')||'[]'));
   } finally {
-    document.getElementById('loadingOverlay').style.display = 'none';
+    const ov = document.getElementById('loadingOverlay');
+    if (ov) ov.style.display = 'none';
   }
 }
 
