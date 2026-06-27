@@ -2215,12 +2215,9 @@ function saveDeliveryOrder() {
 
 function viewDeliveryOrders() {
   const list = document.getElementById('deliveryOrderList');
-  if (!deliveryOrders.length) {
-    list.innerHTML = '<div class="empty-sales">개별발송 내역이 없습니다.</div>';
-    go(15); return;
-  }
-  list.innerHTML = deliveryOrders.map(order => {
-    const itemsHtml = order.items.map(i => {
+
+  const deliveryCards = deliveryOrders.map(order => {
+    const itemsHtml = (order.items || []).map(i => {
       const sizeStr = i.size ? ` · ${i.size}` : '';
       return `
         <div class="order-item">
@@ -2236,13 +2233,32 @@ function viewDeliveryOrders() {
       <div style="width:100%;max-width:700px;background:#fff;border-radius:16px;
                   padding:16px 18px;box-shadow:0 2px 8px rgba(0,0,0,.05);">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-          <span style="font-size:20px;">📦</span>
+          <span style="font-size:13px;font-weight:700;color:#fff;background:#8C5E3E;padding:3px 10px;border-radius:20px;">개별발송</span>
           <span style="font-size:16px;font-weight:800;color:#2A180B;">${order.recipient}</span>
           ${order.phone ? `<span style="font-size:13px;font-weight:600;color:#B08B6A;background:#EAD9C5;padding:3px 10px;border-radius:20px;">뒷번호 ${order.phone}</span>` : ''}
         </div>
         ${itemsHtml}
       </div>`;
-  }).join('');
+  });
+
+  const taekbaeCards = taekbaeOrders.map(order => `
+    <div style="width:100%;max-width:700px;background:#fff;border-radius:16px;
+                padding:16px 18px;box-shadow:0 2px 8px rgba(0,0,0,.05);">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:13px;font-weight:700;color:#fff;background:#4A6890;padding:3px 10px;border-radius:20px;">택배수령</span>
+        <span style="font-size:16px;font-weight:800;color:#2A180B;">${order.name}</span>
+        ${order.phone ? `<span style="font-size:13px;font-weight:600;color:#B08B6A;background:#EAD9C5;padding:3px 10px;border-radius:20px;">뒷번호 ${order.phone}</span>` : ''}
+        ${order.date ? `<span style="font-size:12px;color:#B08B6A;margin-left:auto;">${order.date}</span>` : ''}
+      </div>
+    </div>`);
+
+  const allCards = [...taekbaeCards, ...deliveryCards];
+
+  if (!allCards.length) {
+    list.innerHTML = '<div class="empty-sales">발송 내역이 없습니다.</div>';
+  } else {
+    list.innerHTML = allCards.join('');
+  }
   go(15);
 }
 
