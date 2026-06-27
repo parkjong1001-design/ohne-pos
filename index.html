@@ -1424,7 +1424,6 @@ function finalBasicOrder() {
   document.getElementById('tog-ohne').textContent  = '아니오';
   document.getElementById('totalDiscVal').textContent = '5%';
   go(7);
-  updateShippingNotice();
 }
 
 function toggleDisc(which) {
@@ -1505,13 +1504,13 @@ function renderPage8() {
 
   document.getElementById('orderItemList').innerHTML = orderItems.map(i => {
     const sizeStr   = i.size ? ` · ${i.size}` : '';
-    const disc5Unit = Math.round(i.price * 0.95 / 100) * 100;
+    const discUnit = Math.round(i.price * (1 - pct / 100) / 100) * 100;
     return `
     <div class="order-item">
       <div class="pnum pnum-${i.no[0]}" style="min-width:58px;height:58px;">${i.no}</div>
       <div class="oi-info">
         <div class="oi-name">${i.name}</div>
-        <div class="oi-sub">${i.color}${sizeStr} · ${i.qty}개 × ${disc5Unit.toLocaleString()}원</div>
+        <div class="oi-sub">${i.color}${sizeStr} · ${i.qty}개 × ${discUnit.toLocaleString()}원</div>
       </div>
       <div class="oi-price">${i.lineTotal.toLocaleString()}원</div>
     </div>`;
@@ -1732,6 +1731,7 @@ function addToPartial(key) {
   partialCart[key] = { no: item.no, name: item.name, color: item.color, size: item.size || '', price: item.price, qty };
   renderPartialOptList();
   refreshPartialCart();
+  renderPartialSelect();
   go(20);
 }
 
@@ -1779,7 +1779,7 @@ function resetAllData() {
     db.from('delivery_orders').delete().gte('id',0),
     db.from('taekbae_orders').delete().gte('id',0),
   ]).then(()=>{
-    ['ohne_sales','ohne_delivery','ohne_payment'].forEach(k=>localStorage.removeItem(k));
+    ['ohne_sales','ohne_delivery','ohne_payment','ohne_taekbae'].forEach(k=>localStorage.removeItem(k));
     location.reload();
   });
 }
@@ -2166,16 +2166,20 @@ const db = createClient(
 async function syncFromSupabase() {
   try {
     const [
-      { data: txns },
-      { data: saleTxns },
-      { data: dels },
-      { data: tbs }
+      { data: txns,     error: e1 },
+      { data: saleTxns, error: e2 },
+      { data: dels,     error: e3 },
+      { data: tbs,      error: e4 }
     ] = await Promise.all([
       db.from('transactions').select('*').order('created_at'),
       db.from('sale_transactions').select('*').order('created_at'),
       db.from('delivery_orders').select('*').order('created_at'),
       db.from('taekbae_orders').select('*').order('created_at'),
     ]);
+    if (e1) console.error('transactions 로드 오류:', e1);
+    if (e2) console.error('sale_transactions 로드 오류:', e2);
+    if (e3) console.error('delivery_orders 로드 오류:', e3);
+    if (e4) console.error('taekbae_orders 로드 오류:', e4);
 
     if (txns) txns.forEach(txn => {
       (txn.items || []).forEach(i => {
