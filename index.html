@@ -1441,6 +1441,9 @@ let deliveryMode     = false;
 const deliveryCart   = {};
 const deliveryOrders = [];
 
+let isPaymentProcessing = false; // 이중결제 방지
+let basicCartLocked     = false; // 결제 완료 후 카트 재결제 방지
+
 /* ── 판매 카운터 (Supabase에서 로드) ── */
 const salesCounter = {};
 const paymentLog   = [];
@@ -1449,6 +1452,7 @@ const paymentLog   = [];
 
 function finalBasicOrder() {
   if (!Object.keys(basicCart).length) { alert('담긴 상품이 없습니다.'); return; }
+  if (basicCartLocked) { alert('이미 결제된 카트입니다.'); return; }
   discInsta = false; discOhne = false;
   ['dc-insta','dc-ohne'].forEach(id => document.getElementById(id).classList.remove('active'));
   document.getElementById('tog-insta').textContent = '아니오';
@@ -1515,17 +1519,6 @@ function selectPickup(method) {
   }
 
   const shippingFee = (method === 'delivery' && pendingOrder.origTotal < 100000) ? 3000 : 0;
-  if (method === 'partial_confirmed') {
-    method = 'partial';
-    // partialCart 기반으로 orderItems 재구성
-    pendingOrder.orderItems = Object.values(partialCart).map(i => ({
-      ...i, lineTotal: i.price * i.qty
-    }));
-    pendingOrder.origTotal  = pendingOrder.orderItems.reduce((s, i) => s + i.lineTotal, 0);
-    const pct2 = pendingOrder.pct, rate2 = pct2 / 100;
-    pendingOrder.finalTotal = Math.round(pendingOrder.origTotal * (1 - rate2) / 100) * 100;
-    pendingOrder.disc       = pendingOrder.origTotal - pendingOrder.finalTotal;
-  }
   const payTotal    = pendingOrder.finalTotal + shippingFee;
   pendingOrder.shippingFee = shippingFee;
   pendingOrder.payTotal    = payTotal;
@@ -1571,8 +1564,8 @@ let lastTxId = null;
 
 function startPayment(method) {
   if (!pendingOrder) return;
+  if (isPaymentProcessing) return;
   if (pendingOrder.pickupMethod === 'onsite') {
-    // 현장수령: 입금자명 먼저 입력
     pendingPayMethod = method;
     document.getElementById('onsiteBuyerInput').value = '';
     document.getElementById('onsitePayBtn').textContent =
@@ -1584,6 +1577,7 @@ function startPayment(method) {
 }
 
 function confirmOnsitePayment() {
+  if (isPaymentProcessing) return;
   const name = document.getElementById('onsiteBuyerInput').value.trim();
   if (!name) { alert('입금자 성함을 입력하세요.'); return; }
   completeSale(pendingPayMethod, name);
@@ -1591,6 +1585,8 @@ function confirmOnsitePayment() {
 
 async function completeSale(payMethod, buyerName) {
   if (!pendingOrder) return;
+  if (isPaymentProcessing) return;
+  isPaymentProcessing = true;
 
   pendingOrder.orderItems.forEach(i => {
     const key = `${i.no}|${i.color}|${i.size || ''}`;
@@ -1623,16 +1619,19 @@ async function completeSale(payMethod, buyerName) {
   const pickupMethod = pendingOrder.pickupMethod;
   afterPayPage = 1;
   pendingOrder = null;
+  isPaymentProcessing = false;
 
   alert(`정산 완료! (${methodLabel})`);
 
   if (pickupMethod === 'delivery') {
-    // 택배수령: 수취인 정보 입력 페이지로
+    // 택배수령: basicCart 잠금 후 수취인 입력
+    basicCartLocked = true;
     document.getElementById('taekbaeNameInput').value = '';
     document.getElementById('taekbaePhoneInput').value = '';
     go(19);
   } else if (pickupMethod === 'partial') {
-    // 부분수령: 결제 완료 후 부분수령 상품 선택
+    // 부분수령: basicCart 잠금 후 상품 선택
+    basicCartLocked = true;
     Object.keys(partialCart).forEach(k => delete partialCart[k]);
     renderPartialSelect();
     go(20);
@@ -1658,6 +1657,7 @@ function saveTaekbaeRecipient() {
   if (phone.length < 4) { alert('전화번호 뒷 4자리를 입력하세요.'); return; }
   taekbaeOrders.push({ name, phone, date: new Date().toLocaleDateString('ko-KR') });
   sbInsert('taekbae_orders', { name, phone, transaction_id: lastTxId });
+  basicCartLocked = false;
   Object.keys(basicCart).forEach(k => delete basicCart[k]);
   refreshBasicCart();
   alert(`저장 완료!\n${name} (${phone})`);
@@ -1927,7 +1927,8 @@ function goPaymentDetail() {
   const bank = paymentLog.filter(e => e.method === 'bank');
   const cardTotal = card.reduce((s, e) => s + e.amount, 0);
   const bankTotal = bank.reduce((s, e) => s + e.amount, 0);
-  const grandTotal = cardTotal + bankTotal;
+  const saleTotal = salesCounter['__sale__']?.amount || 0;
+  const grandTotal = cardTotal + bankTotal + saleTotal;
 
   if (!paymentLog.length) {
     box.innerHTML = '<div class="sd-empty-col" style="padding:48px 0;">결제 내역이 없습니다</div>';
@@ -1961,6 +1962,15 @@ function goPaymentDetail() {
       <div>${bank.length ? makeRows(bank) : '<div style="font-size:12px;color:#C4A882;text-align:center;padding:8px 0;">내역 없음</div>'}</div>
       <div style="margin-top:10px;font-size:11px;color:#B08B6A;text-align:right;">${bank.length}건</div>
     </div>
+    <!-- 할인판매 -->
+    ${saleTotal ? `
+    <div style="background:#FAF5EE;border-radius:16px;padding:18px 20px;border:1.5px solid #FECACA;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:22px;">🏷️</span>
+        <span style="font-size:15px;font-weight:700;color:#2A180B;">할인판매</span>
+        <span style="margin-left:auto;font-size:22px;font-weight:900;color:#EF4444;">${saleTotal.toLocaleString()}원</span>
+      </div>
+    </div>` : ''}
     <!-- 합계 -->
     <div style="background:linear-gradient(145deg,#2A180B,#5A3520);border-radius:16px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 6px 20px rgba(42,24,11,.25);">
       <span style="font-size:14px;color:rgba(251,246,239,.65);">총 매출</span>
@@ -2207,6 +2217,7 @@ function saveDeliveryOrder() {
   if (partialDeliveryMode) {
     // 부분수령 흐름: basicCart·partialCart 정리 후 page1
     partialDeliveryMode = false;
+    basicCartLocked = false;
     Object.keys(partialCart).forEach(k => delete partialCart[k]);
     Object.keys(basicCart).forEach(k => delete basicCart[k]);
     refreshBasicCart();
