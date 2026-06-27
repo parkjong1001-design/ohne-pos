@@ -945,7 +945,7 @@
         <div class="cart-total-label">선택 합계</div>
         <div class="cart-total-price" id="partialCartTotal"></div>
       </div>
-      <button class="btn-order" onclick="goPartialPayment()">결제하기 →</button>
+      <button class="btn-order" onclick="goPartialPayment()">선택 완료 →</button>
     </div>
   </div>
 </div>
@@ -1474,9 +1474,13 @@ function selectPickup(method) {
   if (!pendingOrder) return;
 
   if (method === 'partial') {
-    Object.keys(partialCart).forEach(k => delete partialCart[k]);
-    renderPartialSelect();
-    go(20);
+    // 전체 금액 그대로 결제 (현장수령과 동일하게)
+    const shippingFee0 = 0;
+    pendingOrder.shippingFee  = shippingFee0;
+    pendingOrder.payTotal     = pendingOrder.finalTotal;
+    pendingOrder.pickupMethod = 'partial';
+    renderPage8();
+    go(8);
     return;
   }
 
@@ -1574,13 +1578,10 @@ function completeSale(payMethod) {
     document.getElementById('taekbaePhoneInput').value = '';
     go(19);
   } else if (pickupMethod === 'partial') {
-    // 부분수령: partialCart 항목을 deliveryCart에 복사 후 수취인 입력 (page14)
-    Object.keys(deliveryCart).forEach(k => delete deliveryCart[k]);
-    Object.entries(partialCart).forEach(([k, v]) => { deliveryCart[k] = { ...v }; });
-    partialDeliveryMode = true;
-    document.getElementById('deliveryRecipientInput').value = '';
-    document.getElementById('deliveryPhoneInput').value = '';
-    go(14);
+    // 부분수령: 결제 완료 후 부분수령 상품 선택
+    Object.keys(partialCart).forEach(k => delete partialCart[k]);
+    renderPartialSelect();
+    go(20);
   } else {
     // 현장수령: 개별발송 여부 확인 후 종료
     if (Object.keys(basicCart).length && confirm('개별발송이 필요한가요?')) {
@@ -1762,7 +1763,13 @@ function refreshPartialCart() {
 
 function goPartialPayment() {
   if (!Object.keys(partialCart).length) { alert('수령할 상품을 선택하세요.'); return; }
-  selectPickup('partial_confirmed');
+  // 결제는 이미 완료 → 수취인 입력으로
+  Object.keys(deliveryCart).forEach(k => delete deliveryCart[k]);
+  Object.entries(partialCart).forEach(([k, v]) => { deliveryCart[k] = { ...v }; });
+  partialDeliveryMode = true;
+  document.getElementById('deliveryRecipientInput').value = '';
+  document.getElementById('deliveryPhoneInput').value = '';
+  go(14);
 }
 
 
