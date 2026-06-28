@@ -2280,21 +2280,37 @@ function viewDeliveryOrders() {
   const list = document.getElementById('deliveryOrderList');
   let html = '';
 
-  // ── 택배수령 섹션
+  // ── 택배수령 섹션 (날짜별 그룹)
   if (taekbaeOrders.length) {
-    html += `<div style="width:100%;max-width:700px;display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+    const DAYS = ['일','월','화','수','목','금','토'];
+    const grouped = {};
+    const dateOrder = [];
+    taekbaeOrders.forEach(o => {
+      const d = o.date || '날짜 없음';
+      if (!grouped[d]) { grouped[d] = []; dateOrder.push(d); }
+      grouped[d].push(o);
+    });
+    html += `<div style="width:100%;max-width:700px;display:flex;align-items:center;gap:10px;margin-bottom:8px;">
       <span style="font-size:15px;font-weight:800;color:#4A6890;">📦 택배수령</span>
-      <span style="font-size:13px;font-weight:700;color:#fff;background:#4A6890;padding:2px 10px;border-radius:20px;">${taekbaeOrders.length}명</span>
+      <span style="font-size:13px;font-weight:700;color:#fff;background:#4A6890;padding:2px 10px;border-radius:20px;">총 ${taekbaeOrders.length}명</span>
     </div>`;
-    html += taekbaeOrders.map((o, idx) => `
-      <div style="width:100%;max-width:700px;background:#EFF4FB;border-radius:14px;
-                  padding:14px 18px;border:1.5px solid #C5D7EC;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:800;color:#2A180B;">${idx + 1}. ${o.name}</span>
-          ${o.phone ? `<span style="font-size:13px;font-weight:600;color:#4A6890;background:#D6E4F5;padding:3px 10px;border-radius:20px;">뒷번호 ${o.phone}</span>` : ''}
-          ${o.date ? `<span style="font-size:12px;color:#7C9EC0;margin-left:auto;">${o.date}</span>` : ''}
-        </div>
-      </div>`).join('');
+    dateOrder.forEach(dateStr => {
+      const orders = grouped[dateStr];
+      const parsedDate = new Date(dateStr.replace(/\.\s*/g, '-').replace(/-$/, '').trim());
+      const dayLabel = !isNaN(parsedDate) ? `(${DAYS[parsedDate.getDay()]}요일)` : '';
+      html += `<div style="width:100%;max-width:700px;display:flex;align-items:center;gap:8px;margin-top:10px;margin-bottom:4px;">
+        <span style="font-size:13px;font-weight:700;color:#4A6890;">${dateStr} ${dayLabel}</span>
+        <span style="font-size:12px;font-weight:700;color:#fff;background:#7CA8D0;padding:1px 8px;border-radius:12px;">${orders.length}명</span>
+      </div>`;
+      html += orders.map((o, idx) => `
+        <div style="width:100%;max-width:700px;background:#EFF4FB;border-radius:14px;
+                    padding:14px 18px;border:1.5px solid #C5D7EC;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:15px;font-weight:800;color:#2A180B;">${idx + 1}. ${o.name}</span>
+            ${o.phone ? `<span style="font-size:13px;font-weight:600;color:#4A6890;background:#D6E4F5;padding:3px 10px;border-radius:20px;">뒷번호 ${o.phone}</span>` : ''}
+          </div>
+        </div>`).join('');
+    });
   }
 
   // ── 개별발송 섹션
