@@ -864,6 +864,12 @@
 <div class="page" id="page22" style="justify-content:flex-start;padding-top:0;min-height:100vh;gap:12px;">
   <button class="back" onclick="go(9)" style="margin-top:24px;">← 뒤로</button>
   <h1 style="margin-bottom:0;">거래 내역</h1>
+  <div style="display:flex;gap:8px;margin-top:2px;">
+    <button id="txFilterToday" onclick="setTxFilter('today')"
+      style="padding:6px 18px;border-radius:20px;border:2px solid #5A3520;background:#5A3520;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">오늘</button>
+    <button id="txFilterAll" onclick="setTxFilter('all')"
+      style="padding:6px 18px;border-radius:20px;border:2px solid #D5BFA5;background:none;color:#8C6A50;font-size:13px;font-weight:700;cursor:pointer;">전체</button>
+  </div>
   <p class="opt-subtitle" style="margin-top:0;">삭제할 거래 건의 × 버튼을 누르세요</p>
   <div id="txHistoryList" style="width:100%;max-width:700px;display:flex;flex-direction:column;gap:10px;"></div>
 </div>
@@ -1836,33 +1842,33 @@ function goPartialPayment() {
 function goSales() { go(9); }
 
 /* ── 거래 내역 · 삭제 ── */
-async function goTxHistory() {
+let txFilter = 'today';
+
+function setTxFilter(mode) {
+  txFilter = mode;
+  document.getElementById('txFilterToday').style.background = mode === 'today' ? '#5A3520' : 'none';
+  document.getElementById('txFilterToday').style.color     = mode === 'today' ? '#fff' : '#8C6A50';
+  document.getElementById('txFilterToday').style.borderColor = mode === 'today' ? '#5A3520' : '#D5BFA5';
+  document.getElementById('txFilterAll').style.background  = mode === 'all' ? '#5A3520' : 'none';
+  document.getElementById('txFilterAll').style.color       = mode === 'all' ? '#fff' : '#8C6A50';
+  document.getElementById('txFilterAll').style.borderColor = mode === 'all' ? '#5A3520' : '#D5BFA5';
+  renderTxList(window._txCache || []);
+}
+
+function renderTxList(all) {
+  window._txCache = all;
   const list = document.getElementById('txHistoryList');
-  list.innerHTML = '<div style="text-align:center;color:#B08B6A;padding:40px 0;">불러오는 중...</div>';
-  go(22);
+  const todayKST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).toLocaleDateString('ko-KR');
+  const filtered = txFilter === 'today'
+    ? all.filter(t => new Date(new Date(t.created_at).toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).toLocaleDateString('ko-KR') === todayKST)
+    : all;
 
-  let txns, saleTxns;
-  try {
-    [txns, saleTxns] = await Promise.all([
-      sbGet('transactions'),
-      sbGet('sale_transactions'),
-    ]);
-  } catch(e) {
-    list.innerHTML = '<div style="text-align:center;color:#EF4444;padding:40px 0;">네트워크 오류. 다시 시도해주세요.</div>';
+  if (!filtered.length) {
+    list.innerHTML = `<div style="text-align:center;color:#B08B6A;padding:40px 0;">${txFilter === 'today' ? '오늘 거래가 없습니다' : '거래 내역이 없습니다'}</div>`;
     return;
   }
 
-  const all = [
-    ...(Array.isArray(txns) ? txns.map(t => ({ ...t, _type: 'basic' })) : []),
-    ...(Array.isArray(saleTxns) ? saleTxns.map(t => ({ ...t, _type: 'sale' })) : []),
-  ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-  if (!all.length) {
-    list.innerHTML = '<div style="text-align:center;color:#B08B6A;padding:40px 0;">거래 내역이 없습니다</div>';
-    return;
-  }
-
-  list.innerHTML = all.map(t => {
+  list.innerHTML = filtered.map(t => {
     const dt   = new Date(t.created_at);
     const date = dt.toLocaleDateString('ko-KR');
     const time = dt.toLocaleTimeString('ko-KR', { hour:'2-digit', minute:'2-digit' });
@@ -1905,6 +1911,31 @@ async function goTxHistory() {
         style="flex-shrink:0;width:34px;height:34px;border:none;border-radius:50%;background:#FEE2E2;color:#DC2626;font-size:18px;font-weight:700;cursor:pointer;line-height:1;">×</button>
     </div>`;
   }).join('');
+}
+
+async function goTxHistory() {
+  const list = document.getElementById('txHistoryList');
+  list.innerHTML = '<div style="text-align:center;color:#B08B6A;padding:40px 0;">불러오는 중...</div>';
+  go(22);
+  setTxFilter(txFilter);
+
+  let txns, saleTxns;
+  try {
+    [txns, saleTxns] = await Promise.all([
+      sbGet('transactions'),
+      sbGet('sale_transactions'),
+    ]);
+  } catch(e) {
+    list.innerHTML = '<div style="text-align:center;color:#EF4444;padding:40px 0;">네트워크 오류. 다시 시도해주세요.</div>';
+    return;
+  }
+
+  const all = [
+    ...(Array.isArray(txns) ? txns.map(t => ({ ...t, _type: 'basic' })) : []),
+    ...(Array.isArray(saleTxns) ? saleTxns.map(t => ({ ...t, _type: 'sale' })) : []),
+  ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  renderTxList(all);
 }
 
 async function deleteTx(id, type) {
