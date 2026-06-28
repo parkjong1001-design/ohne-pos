@@ -1140,7 +1140,8 @@ function finalOrder() {
   const saleOrderItem = { name: buyerName.trim() || '-', qty: totalQty, amount: total, colors: colorSummary };
   salesCounter[saleKey].orders.push(saleOrderItem);
   const saleItems = Object.entries(cart).filter(([,q])=>q>0).map(([n,q])=>({name:n,qty:q,price:DISCOUNT_ITEMS[n].price}));
-  sbInsert('sale_transactions', { buyer_name: buyerName.trim()||'-', items: saleItems, qty: totalQty, amount: total });
+  sbInsert('sale_transactions', { buyer_name: buyerName.trim()||'-', items: saleItems, qty: totalQty, amount: total })
+    .then(res => { if (Array.isArray(res) && res[0]) _rawSaleTxns.push(res[0]); });
 
   // 장바구니 초기화
   for (const k of Object.keys(cart)) cart[k] = 0;
@@ -1453,6 +1454,17 @@ let basicCartLocked     = false; // 결제 완료 후 카트 재결제 방지
 /* ── 판매 카운터 (Supabase에서 로드) ── */
 const salesCounter = {};
 const paymentLog   = [];
+let _rawTxns     = [];
+let _rawSaleTxns = [];
+
+const _DAYS = ['일','월','화','수','목','금','토'];
+function _kstDateStr(created_at) {
+  return new Date(new Date(created_at).toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).toLocaleDateString('ko-KR');
+}
+function _dayLabel(dateStr) {
+  const d = new Date(dateStr.replace(/\.\s*/g, '-').replace(/-$/, '').trim());
+  return isNaN(d) ? '' : `(${_DAYS[d.getDay()]}요일)`;
+}
 // salesCounter 구조: { "T1|khaki": {no, name, color, cat, qty} }
 
 
@@ -1625,8 +1637,9 @@ async function completeSale(payMethod, buyerName) {
     return;
   }
   lastTxId = txResult[0]?.id || null;
+  _rawTxns.push(txResult[0]);
 
-  paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품' });
+  paymentLog.push({ type: 'basic', method: payMethod, amount: pendingOrder.payTotal, label: '일반상품', created_at: txResult[0].created_at });
 
   const methodLabel = payMethod === 'card' ? '카드' : '계좌이체';
   const pickupMethod = pendingOrder.pickupMethod;
@@ -1967,89 +1980,118 @@ function resetAllData() {
 function goPaymentDetail() {
   const box = document.getElementById('paymentBreakdown');
 
-  const card = paymentLog.filter(e => e.method === 'card');
-  const bank = paymentLog.filter(e => e.method === 'bank');
-  const cardTotal = card.reduce((s, e) => s + e.amount, 0);
-  const bankTotal = bank.reduce((s, e) => s + e.amount, 0);
-  const saleTotal = salesCounter['__sale__']?.amount || 0;
-  const grandTotal = cardTotal + bankTotal + saleTotal;
-
-  if (!paymentLog.length) {
+  if (!paymentLog.length && !_rawSaleTxns.length) {
     box.innerHTML = '<div class="sd-empty-col" style="padding:48px 0;">결제 내역이 없습니다</div>';
     go(17); return;
   }
 
-  const makeRows = (entries) => entries.map(e => `
-    <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #EAD9C5;font-size:12px;">
-      <span style="color:#8C6A50;">${e.label}</span>
-      <span style="font-weight:700;color:#2A180B;">${e.amount.toLocaleString()}원</span>
-    </div>`).join('');
+  // 날짜별 그룹 (일반 + 할인)
+  const byDate = {}; const dateOrder = [];
+  paymentLog.forEach(e => {
+    const d = e.created_at ? _kstDateStr(e.created_at) : '날짜 없음';
+    if (!byDate[d]) { byDate[d] = { card:[], bank:[], saleAmt:0 }; dateOrder.push(d); }
+    if (e.method === 'card') byDate[d].card.push(e);
+    else                     byDate[d].bank.push(e);
+  });
+  _rawSaleTxns.forEach(t => {
+    const d = t.created_at ? _kstDateStr(t.created_at) : '날짜 없음';
+    if (!byDate[d]) { byDate[d] = { card:[], bank:[], saleAmt:0 }; dateOrder.push(d); }
+    byDate[d].saleAmt += t.amount || 0;
+  });
 
-  box.innerHTML = `
-    <!-- 카드 -->
-    <div style="background:#FAF5EE;border-radius:16px;padding:18px 20px;border:1.5px solid #D5BFA5;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-        <span style="font-size:22px;">💳</span>
-        <span style="font-size:15px;font-weight:700;color:#2A180B;">카드 결제</span>
-        <span style="margin-left:auto;font-size:22px;font-weight:900;color:#5A3520;">${cardTotal.toLocaleString()}원</span>
+  let grandCard = 0; let grandBank = 0; let grandSale = 0;
+  let html = '';
+
+  dateOrder.forEach(dateStr => {
+    const g = byDate[dateStr];
+    const dayCard = g.card.reduce((s, e) => s + e.amount, 0);
+    const dayBank = g.bank.reduce((s, e) => s + e.amount, 0);
+    const dayTotal = dayCard + dayBank + g.saleAmt;
+    grandCard += dayCard; grandBank += dayBank; grandSale += g.saleAmt;
+
+    html += `
+    <div style="background:#FAF5EE;border-radius:16px;padding:16px 20px;border:1.5px solid #D5BFA5;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:8px;border-bottom:1.5px solid #EAD9C5;">
+        <span style="font-size:13px;font-weight:800;color:#5A3520;">${dateStr} ${_dayLabel(dateStr)}</span>
+        <span style="margin-left:auto;font-size:14px;font-weight:900;color:#2A180B;">${dayTotal.toLocaleString()}원</span>
       </div>
-      <div>${card.length ? makeRows(card) : '<div style="font-size:12px;color:#C4A882;text-align:center;padding:8px 0;">내역 없음</div>'}</div>
-      <div style="margin-top:10px;font-size:11px;color:#B08B6A;text-align:right;">${card.length}건</div>
-    </div>
-    <!-- 계좌 -->
-    <div style="background:#FAF5EE;border-radius:16px;padding:18px 20px;border:1.5px solid #D5BFA5;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-        <span style="font-size:22px;">🏦</span>
-        <span style="font-size:15px;font-weight:700;color:#2A180B;">계좌 이체</span>
-        <span style="margin-left:auto;font-size:22px;font-weight:900;color:#4A6890;">${bankTotal.toLocaleString()}원</span>
+      ${g.card.length ? `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;">
+        <span style="color:#5A3520;">💳 카드 <span style="color:#B08B6A;font-size:11px;">${g.card.length}건</span></span>
+        <span style="font-weight:700;color:#5A3520;">${dayCard.toLocaleString()}원</span>
+      </div>` : ''}
+      ${g.bank.length ? `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;">
+        <span style="color:#4A6890;">🏦 계좌 <span style="color:#B08B6A;font-size:11px;">${g.bank.length}건</span></span>
+        <span style="font-weight:700;color:#4A6890;">${dayBank.toLocaleString()}원</span>
+      </div>` : ''}
+      ${g.saleAmt ? `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;">
+        <span style="color:#EF4444;">🏷️ 할인판매</span>
+        <span style="font-weight:700;color:#EF4444;">${g.saleAmt.toLocaleString()}원</span>
+      </div>` : ''}
+    </div>`;
+  });
+
+  const grandTotal = grandCard + grandBank + grandSale;
+  html += `
+    <div style="background:linear-gradient(145deg,#2A180B,#5A3520);border-radius:16px;padding:16px 22px;border:none;margin-top:4px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <span style="font-size:14px;color:rgba(251,246,239,.65);">총 매출</span>
+        <span style="font-size:24px;font-weight:900;color:#FAF5EE;">${grandTotal.toLocaleString()}원</span>
       </div>
-      <div>${bank.length ? makeRows(bank) : '<div style="font-size:12px;color:#C4A882;text-align:center;padding:8px 0;">내역 없음</div>'}</div>
-      <div style="margin-top:10px;font-size:11px;color:#B08B6A;text-align:right;">${bank.length}건</div>
-    </div>
-    <!-- 할인판매 -->
-    ${saleTotal ? `
-    <div style="background:#FAF5EE;border-radius:16px;padding:18px 20px;border:1.5px solid #FECACA;">
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-size:22px;">🏷️</span>
-        <span style="font-size:15px;font-weight:700;color:#2A180B;">할인판매</span>
-        <span style="margin-left:auto;font-size:22px;font-weight:900;color:#EF4444;">${saleTotal.toLocaleString()}원</span>
+      <div style="display:flex;gap:16px;font-size:12px;color:rgba(251,246,239,.55);">
+        <span>💳 ${grandCard.toLocaleString()}원</span>
+        <span>🏦 ${grandBank.toLocaleString()}원</span>
+        ${grandSale ? `<span>🏷️ ${grandSale.toLocaleString()}원</span>` : ''}
       </div>
-    </div>` : ''}
-    <!-- 합계 -->
-    <div style="background:linear-gradient(145deg,#2A180B,#5A3520);border-radius:16px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 6px 20px rgba(42,24,11,.25);">
-      <span style="font-size:14px;color:rgba(251,246,239,.65);">총 매출</span>
-      <span style="font-size:24px;font-weight:900;color:#FAF5EE;">${grandTotal.toLocaleString()}원</span>
     </div>`;
 
+  box.innerHTML = html;
   go(17);
 }
 
 function goSaleDetail() {
-  const saleEntry = salesCounter['__sale__'];
-  const saleBody  = document.getElementById('sdSaleBody');
-  const footer    = document.getElementById('sdSaleFooter');
+  const saleBody = document.getElementById('sdSaleBody');
+  const footer   = document.getElementById('sdSaleFooter');
 
-  if (saleEntry) {
-    const orderRows = (saleEntry.orders || []).map(o => `
-      <div style="padding:5px 0;border-bottom:1px solid #EAD9C5;font-size:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-weight:700;color:#374151;">${o.name}</span>
-          <span style="color:#9CA3AF;">${o.qty}개 · ${o.amount.toLocaleString()}원</span>
-        </div>
-        ${o.colors ? `<div style="color:#9CA3AF;margin-top:2px;">${o.colors}</div>` : ''}
-      </div>`).join('');
-    saleBody.innerHTML = `
-      <div class="sd-sale-big">${saleEntry.qty}<span style="font-size:14px;font-weight:500;color:#9CA3AF;margin-left:2px;">개</span></div>
-      <div class="sd-sale-sub">누적 판매 수량</div>
-      ${orderRows}
-      <div class="sd-sale-amt">${saleEntry.amount.toLocaleString()}원</div>`;
-    document.getElementById('sdSaleQty').textContent   = saleEntry.qty + '개';
-    document.getElementById('sdSaleTotal').textContent = saleEntry.amount.toLocaleString() + '원';
-    footer.style.display = 'flex';
-  } else {
+  if (!_rawSaleTxns.length) {
     saleBody.innerHTML   = '<div class="sd-empty-col">판매 없음</div>';
     footer.style.display = 'none';
+    go(11); return;
   }
+
+  const byDate = {}; const dateOrder = [];
+  _rawSaleTxns.forEach(t => {
+    const d = _kstDateStr(t.created_at);
+    if (!byDate[d]) { byDate[d] = []; dateOrder.push(d); }
+    byDate[d].push(t);
+  });
+
+  let grandQty = 0; let grandAmt = 0;
+  let html = '';
+  dateOrder.forEach(dateStr => {
+    const txns = byDate[dateStr];
+    const dayQty = txns.reduce((s, t) => s + (t.qty || 0), 0);
+    const dayAmt = txns.reduce((s, t) => s + (t.amount || 0), 0);
+    grandQty += dayQty; grandAmt += dayAmt;
+
+    html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 0 4px;border-top:2px solid #FECACA;margin-top:10px;">
+      <span style="font-size:13px;font-weight:800;color:#EF4444;">${dateStr} ${_dayLabel(dateStr)}</span>
+      <span style="font-size:12px;color:#9CA3AF;margin-left:4px;">${dayQty}개</span>
+      <span style="margin-left:auto;font-size:13px;font-weight:700;color:#EF4444;">${dayAmt.toLocaleString()}원</span>
+    </div>`;
+    html += txns.map(t => `
+      <div style="padding:5px 0;border-bottom:1px solid #EAD9C5;font-size:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:700;color:#374151;">${t.buyer_name || '-'}</span>
+          <span style="color:#9CA3AF;">${t.qty}개 · ${(t.amount||0).toLocaleString()}원</span>
+        </div>
+        ${t.items?.length ? `<div style="color:#9CA3AF;margin-top:2px;">${t.items.map(i=>`${i.name} ${i.qty}개`).join(', ')}</div>` : ''}
+      </div>`).join('');
+  });
+
+  saleBody.innerHTML = html;
+  document.getElementById('sdSaleQty').textContent   = grandQty + '개';
+  document.getElementById('sdSaleTotal').textContent = grandAmt.toLocaleString() + '원';
+  footer.style.display = 'flex';
   go(11);
 }
 
@@ -2345,19 +2387,51 @@ function viewDeliveryOrders() {
 }
 
 function goBasicDetail() {
-  const basicEntries = Object.values(salesCounter).filter(e => !e.isSale);
-  const basicList    = document.getElementById('sdBasicList');
-  const footer       = document.getElementById('sdBasicFooter');
+  const basicList = document.getElementById('sdBasicList');
+  const footer    = document.getElementById('sdBasicFooter');
+  const catOrder  = ['T','B','D','A','M'];
 
-  if (basicEntries.length) {
-    const catOrder = ['T','B','D','A','M'];
-    basicEntries.sort((a, b) => {
+  if (!_rawTxns.length) {
+    basicList.innerHTML  = '<div class="sd-empty-col">판매 없음</div>';
+    footer.style.display = 'none';
+    go(12); return;
+  }
+
+  // 날짜별 그룹
+  const byDate = {}; const dateOrder = [];
+  _rawTxns.forEach(txn => {
+    const d = _kstDateStr(txn.created_at);
+    if (!byDate[d]) { byDate[d] = []; dateOrder.push(d); }
+    byDate[d].push(txn);
+  });
+
+  let grandTotal = 0;
+  let html = '';
+  dateOrder.forEach(dateStr => {
+    const counter = {};
+    byDate[dateStr].forEach(txn => {
+      const rate = (txn.pct || 0) / 100;
+      (txn.items || []).forEach(i => {
+        const key = `${i.no}|${i.color}|${i.size||''}`;
+        const discAmt = Math.round(i.price * (1 - rate) / 100) * 100 * (i.qty || 1);
+        if (!counter[key]) counter[key] = { no:i.no, name:i.name, color:i.color, size:i.size||'', cat:i.no[0], qty:0, amount:0 };
+        counter[key].qty    += i.qty;
+        counter[key].amount += discAmt;
+      });
+    });
+    const entries = Object.values(counter).sort((a, b) => {
       const ci = catOrder.indexOf(a.cat) - catOrder.indexOf(b.cat);
       return ci !== 0 ? ci : a.no.localeCompare(b.no);
     });
-    basicList.innerHTML = basicEntries.map(e => {
+    const dayTotal = entries.reduce((s, e) => s + e.amount, 0);
+    grandTotal += dayTotal;
+
+    html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 0 4px;border-top:2px solid #D5BFA5;margin-top:10px;">
+      <span style="font-size:13px;font-weight:800;color:#5A3520;">${dateStr} ${_dayLabel(dateStr)}</span>
+      <span style="margin-left:auto;font-size:13px;font-weight:700;color:#8C5E3E;">${dayTotal.toLocaleString()}원</span>
+    </div>`;
+    html += entries.map(e => {
       const sizeStr = e.size ? ` · ${e.size}` : '';
-      const amtStr  = e.amount ? e.amount.toLocaleString() + '원' : '';
       return `
         <div class="sd-br">
           <div class="pnum pnum-${e.cat}" style="min-width:30px;height:30px;font-size:9px;flex-shrink:0;">${e.no}</div>
@@ -2367,17 +2441,15 @@ function goBasicDetail() {
           </div>
           <div class="sd-br-right">
             <div class="sd-br-qty">${e.qty}개</div>
-            ${amtStr ? `<div class="sd-br-amt">${amtStr}</div>` : ''}
+            ${e.amount ? `<div class="sd-br-amt">${e.amount.toLocaleString()}원</div>` : ''}
           </div>
         </div>`;
     }).join('');
-    const basicAmt = basicEntries.reduce((s, e) => s + (e.amount || 0), 0);
-    document.getElementById('sdBasicTotal').textContent = basicAmt.toLocaleString() + '원';
-    footer.style.display = 'flex';
-  } else {
-    basicList.innerHTML  = '<div class="sd-empty-col">판매 없음</div>';
-    footer.style.display = 'none';
-  }
+  });
+
+  basicList.innerHTML = html;
+  document.getElementById('sdBasicTotal').textContent = grandTotal.toLocaleString() + '원';
+  footer.style.display = 'flex';
   go(12);
 }
 
@@ -2406,6 +2478,8 @@ async function syncFromSupabase() {
     paymentLog.length = 0;
     deliveryOrders.length = 0;
     taekbaeOrders.length = 0;
+    _rawTxns.length = 0;
+    _rawSaleTxns.length = 0;
 
     const [txns, saleTxns, dels, tbs] = await Promise.all([
       sbGet('transactions'),
@@ -2414,26 +2488,30 @@ async function syncFromSupabase() {
       sbGet('taekbae_orders'),
     ]);
 
-    if (Array.isArray(txns)) txns.forEach(txn => {
-      const rate = (txn.pct || 0) / 100;
-      (txn.items || []).forEach(i => {
-        const key = `${i.no}|${i.color}|${i.size||''}`;
-        const discAmt = Math.round(i.price * (1 - rate) / 100) * 100 * (i.qty || 1);
-        if (!salesCounter[key])
-          salesCounter[key] = { no:i.no, name:i.name, color:i.color, size:i.size||'', cat:i.no[0], qty:0, amount:0 };
-        salesCounter[key].qty    += i.qty;
-        salesCounter[key].amount += discAmt;
+    if (Array.isArray(txns)) {
+      _rawTxns.push(...txns);
+      txns.forEach(txn => {
+        const rate = (txn.pct || 0) / 100;
+        (txn.items || []).forEach(i => {
+          const key = `${i.no}|${i.color}|${i.size||''}`;
+          const discAmt = Math.round(i.price * (1 - rate) / 100) * 100 * (i.qty || 1);
+          if (!salesCounter[key])
+            salesCounter[key] = { no:i.no, name:i.name, color:i.color, size:i.size||'', cat:i.no[0], qty:0, amount:0 };
+          salesCounter[key].qty    += i.qty;
+          salesCounter[key].amount += discAmt;
+        });
+        paymentLog.push({ type:'basic', method:txn.pay_method, amount:txn.pay_total, label:'일반상품', created_at:txn.created_at });
       });
-      paymentLog.push({ type:'basic', method:txn.pay_method, amount:txn.pay_total, label:'일반상품' });
-    });
+    }
 
     if (Array.isArray(saleTxns) && saleTxns.length) {
+      _rawSaleTxns.push(...saleTxns);
       salesCounter['__sale__'] = { isSale:true, qty:0, amount:0, orders:[] };
       saleTxns.forEach(t => {
         salesCounter['__sale__'].qty    += t.qty;
         salesCounter['__sale__'].amount += t.amount;
         const colors = (t.items||[]).map(i=>`${i.name} ${i.qty}개`).join(', ');
-        salesCounter['__sale__'].orders.push({ name:t.buyer_name, qty:t.qty, amount:t.amount, colors });
+        salesCounter['__sale__'].orders.push({ name:t.buyer_name, qty:t.qty, amount:t.amount, colors, created_at:t.created_at });
       });
     }
 
